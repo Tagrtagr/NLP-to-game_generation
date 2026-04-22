@@ -1,0 +1,108 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scripts/main.gd" id="1_main"]
+[ext_resource type="PackedScene" path="res://scenes/player.tscn" id="2_player"]
+
+[sub_resource type="RectangleShape2D" id="Shape_ground"]
+size = Vector2(960, 40)
+
+[sub_resource type="RectangleShape2D" id="Shape_platform"]
+size = Vector2(180, 24)
+
+[sub_resource type="RectangleShape2D" id="Shape_goal"]
+size = Vector2(40, 60)
+
+[node name="Main" type="Node2D"]
+script = ExtResource("1_main")
+
+[node name="Camera2D" type="Camera2D" parent="."]
+position = Vector2(480, 270)
+zoom = Vector2(1, 1)
+
+[node name="Background" type="ColorRect" parent="."]
+offset_right = 960.0
+offset_bottom = 540.0
+color = Color(0.14, 0.15, 0.22, 1)
+
+[node name="Player" parent="." instance=ExtResource("2_player")]
+position = Vector2(80, 200)
+
+[node name="Ground" type="StaticBody2D" parent="."]
+position = Vector2(480, 500)
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="Ground"]
+shape = SubResource("Shape_ground")
+
+[node name="Visual" type="ColorRect" parent="Ground"]
+offset_left = -480.0
+offset_top = -20.0
+offset_right = 480.0
+offset_bottom = 20.0
+color = Color(0.22, 0.28, 0.35, 1)
+
+[node name="PlatformA" type="StaticBody2D" parent="."]
+position = Vector2(280, 400)
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="PlatformA"]
+shape = SubResource("Shape_platform")
+
+[node name="Visual" type="ColorRect" parent="PlatformA"]
+offset_left = -90.0
+offset_top = -12.0
+offset_right = 90.0
+offset_bottom = 12.0
+color = Color(0.35, 0.45, 0.5, 1)
+
+[node name="PlatformB" type="StaticBody2D" parent="."]
+position = Vector2(560, 320)
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="PlatformB"]
+shape = SubResource("Shape_platform")
+
+[node name="Visual" type="ColorRect" parent="PlatformB"]
+offset_left = -90.0
+offset_top = -12.0
+offset_right = 90.0
+offset_bottom = 12.0
+color = Color(0.35, 0.45, 0.5, 1)
+
+[node name="PlatformC" type="StaticBody2D" parent="."]
+position = Vector2(800, 240)
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="PlatformC"]
+shape = SubResource("Shape_platform")
+
+[node name="Visual" type="ColorRect" parent="PlatformC"]
+offset_left = -90.0
+offset_top = -12.0
+offset_right = 90.0
+offset_bottom = 12.0
+color = Color(0.35, 0.45, 0.5, 1)
+
+[node name="Goal" type="Area2D" parent="."]
+position = Vector2(870, 180)
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="Goal"]
+shape = SubResource("Shape_goal")
+
+[node name="Visual" type="ColorRect" parent="Goal"]
+offset_left = -20.0
+offset_top = -30.0
+offset_right = 20.0
+offset_bottom = 30.0
+color = Color(0.45, 0.95, 0.55, 1)
+
+[node name="UI" type="CanvasLayer" parent="."]
+
+[node name="Banner" type="Label" parent="UI"]
+anchor_left = 0.5
+anchor_top = 0.3
+anchor_right = 0.5
+anchor_bottom = 0.3
+offset_left = -120.0
+offset_top = -20.0
+offset_right = 120.0
+offset_bottom = 20.0
+horizontal_alignment = 1
+vertical_alignment = 1
+text = "GO"
