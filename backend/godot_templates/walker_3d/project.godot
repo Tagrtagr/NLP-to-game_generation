@@ -14,6 +14,7 @@ config/icon="res://icon.svg"
 [autoload]
 
 ReadySignal="*res://autoload/ready_signal.gd"
+ScreenShake="*res://autoload/screen_shake.gd"
 
 [display]
 

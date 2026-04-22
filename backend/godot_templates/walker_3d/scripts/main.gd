@@ -13,10 +13,12 @@ func _on_goal_entered(body: Node) -> void:
 	if body == player:
 		banner.text = "YOU WIN"
 		banner.visible = true
+		ScreenShake.kick(0.12, 0.35)
 		player.won.emit()
 
 func _on_player_died() -> void:
 	banner.text = "FELL — RESTART"
 	banner.visible = true
+	ScreenShake.kick(0.2, 0.4)
 	await get_tree().create_timer(0.6).timeout
 	banner.visible = false
