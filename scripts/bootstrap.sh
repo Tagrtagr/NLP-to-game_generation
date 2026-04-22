@@ -72,6 +72,48 @@ else
   echo "[bootstrap] Export templates already present."
 fi
 
+# --- Kenney fallback assets (manual step) ---
+# Kenney's CDN paths are not stable across site redeploys, so we don't script
+# the download here. Instead, we create the directory skeleton and print the
+# list of packs to fetch manually. The step-6 fallback loader tolerates
+# missing files — it probes by kind (*.png / *.glb / *.wav) and falls back
+# to engine primitives (ColorRect, BoxMesh, silent AudioStream) if nothing
+# matches. So the pipeline runs even without this step; it just looks plainer.
+ASSETS_DIR="$ROOT_DIR/backend/fallback_assets"
+SFX_WAV_DIR="$ROOT_DIR/backend/sfx/wav"
+mkdir -p "$ASSETS_DIR/sprites_2d/kenney_platformer" \
+         "$ASSETS_DIR/sprites_2d/kenney_topdown" \
+         "$ASSETS_DIR/tiles_2d/kenney_platformer" \
+         "$ASSETS_DIR/ui_2d/kenney_ui" \
+         "$ASSETS_DIR/ui_2d/kenney_backgrounds" \
+         "$ASSETS_DIR/meshes_3d/kenney_mini_chars" \
+         "$ASSETS_DIR/meshes_3d/kenney_nature" \
+         "$ASSETS_DIR/meshes_3d/kenney_proto" \
+         "$SFX_WAV_DIR"
+
+if [ ! -f "$ASSETS_DIR/.populated" ]; then
+  cat <<'EOF'
+
+[bootstrap] Fallback asset packs: manual download required.
+  Download these CC0 packs from https://kenney.nl/assets, unzip, and drop the
+  raw files (no nested folders) into the matching directory below:
+
+    backend/fallback_assets/sprites_2d/kenney_platformer/   (Platformer Art Deluxe)
+    backend/fallback_assets/sprites_2d/kenney_topdown/      (Topdown Tanks / Topdown Shooter)
+    backend/fallback_assets/ui_2d/kenney_ui/                (UI Pack)
+    backend/fallback_assets/ui_2d/kenney_backgrounds/       (Background Elements)
+    backend/fallback_assets/meshes_3d/kenney_mini_chars/    (Mini Characters 1)
+    backend/fallback_assets/meshes_3d/kenney_nature/        (Nature Kit)
+    backend/fallback_assets/meshes_3d/kenney_proto/         (Prototype Textures / Platformer Kit)
+    backend/sfx/wav/                                        (Interface Sounds + Impact Sounds + RPG Audio)
+
+  After dropping files in: touch backend/fallback_assets/.populated
+  (The pipeline still runs without this — fallback loader degrades to engine
+  primitives. But the output looks much better with real Kenney assets.)
+
+EOF
+fi
+
 # --- Frontend deps + Playwright chromium ---
 if [ -d "$ROOT_DIR/frontend" ]; then
   echo "[bootstrap] Installing frontend deps..."

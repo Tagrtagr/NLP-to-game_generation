@@ -1,0 +1,29 @@
+{
+  "_doc": "SFX role → filename + description. Injected verbatim into design + synthesize system prompts. GameDesign.sfx_map values must be keys from this file (Pydantic-validated). Files are CC0 from Kenney's Interface/Impact/RPG Audio packs; fetched by bootstrap.sh into backend/sfx/wav/.",
+
+  "jump_soft":    { "file": "wav/jump_soft.wav",    "desc": "Light springy jump, cartoony arc" },
+  "jump_heavy":   { "file": "wav/jump_heavy.wav",   "desc": "Grounded thud jump, weighty" },
+  "land_soft":    { "file": "wav/land_soft.wav",    "desc": "Soft landing scuff" },
+  "footstep_grass": { "file": "wav/footstep_grass.wav", "desc": "Muffled grass footstep, loopable" },
+  "footstep_stone": { "file": "wav/footstep_stone.wav", "desc": "Hard stone footstep" },
+
+  "pickup_coin":  { "file": "wav/pickup_coin.wav",  "desc": "Bright coin/chime — reward pickup" },
+  "pickup_gem":   { "file": "wav/pickup_gem.wav",   "desc": "Sparkly high-value pickup" },
+  "pickup_key":   { "file": "wav/pickup_key.wav",   "desc": "Satisfying key/unlock ding" },
+
+  "hit_player":   { "file": "wav/hit_player.wav",   "desc": "Muffled thump — player takes damage" },
+  "hit_enemy":    { "file": "wav/hit_enemy.wav",    "desc": "Crunchy impact on enemy" },
+  "enemy_defeat": { "file": "wav/enemy_defeat.wav", "desc": "Satisfying pop — enemy stomped/killed" },
+
+  "death_player": { "file": "wav/death_player.wav", "desc": "Descending tone — player dies" },
+  "win_jingle":   { "file": "wav/win_jingle.wav",   "desc": "Short 4-note fanfare — level complete" },
+  "lose_jingle":  { "file": "wav/lose_jingle.wav",  "desc": "Short descending jingle — game over" },
+
+  "ui_click":     { "file": "wav/ui_click.wav",     "desc": "Small UI tick/click" },
+  "ui_confirm":   { "file": "wav/ui_confirm.wav",   "desc": "Menu confirm/select" },
+  "ui_back":      { "file": "wav/ui_back.wav",      "desc": "Menu back/cancel" },
+
+  "shoot_laser":  { "file": "wav/shoot_laser.wav",  "desc": "Zappy laser shot (shooter)" },
+  "shoot_blaster":{ "file": "wav/shoot_blaster.wav","desc": "Chunky blaster shot (shooter)" },
+  "explosion":    { "file": "wav/explosion.wav",    "desc": "Short explosion / blast" }
+}

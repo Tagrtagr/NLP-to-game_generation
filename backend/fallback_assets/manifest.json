@@ -1,0 +1,105 @@
+{
+  "_doc": "Fallback asset roles. Keys are semantic roles referenced by GameDesign.assets[].fallback_role. Each role resolves to one file path (relative to backend/fallback_assets/) at runtime via load_fallback(role). If a role lists multiple files, the resolver picks deterministically (hash of asset.id) for stability across retries. These are CC0 Kenney packs fetched by scripts/bootstrap.sh — do not commit the binary content.",
+
+  "player_sprite_topdown": {
+    "kind": "sprite",
+    "desc": "4-directional top-down humanoid sprite, 32px",
+    "files": ["sprites_2d/kenney_topdown/character_0.png"]
+  },
+  "player_sprite_platformer": {
+    "kind": "sprite",
+    "desc": "Side-facing platformer hero, walk+jump frames, 32x48",
+    "files": ["sprites_2d/kenney_platformer/player_stand.png"]
+  },
+  "enemy_sprite_generic": {
+    "kind": "sprite",
+    "desc": "Simple enemy silhouette (slime / blob / bug)",
+    "files": ["sprites_2d/kenney_platformer/slime.png"]
+  },
+  "pickup_sprite_generic": {
+    "kind": "sprite",
+    "desc": "Collectible pickup (coin / gem / star), 16-24px",
+    "files": ["sprites_2d/kenney_platformer/coin.png"]
+  },
+
+  "tile_grass_2d": {
+    "kind": "tileset",
+    "desc": "Grass ground tileset, 16x16",
+    "files": ["tiles_2d/kenney_platformer/tile_grass.png"]
+  },
+  "tile_stone_2d": {
+    "kind": "tileset",
+    "desc": "Stone/dungeon tileset, 16x16",
+    "files": ["tiles_2d/kenney_platformer/tile_stone.png"]
+  },
+  "tile_sand_2d": {
+    "kind": "tileset",
+    "desc": "Sand / desert tileset, 16x16",
+    "files": ["tiles_2d/kenney_platformer/tile_sand.png"]
+  },
+
+  "bg_sky_2d": {
+    "kind": "bg",
+    "desc": "Gradient sky parallax background",
+    "files": ["ui_2d/kenney_backgrounds/sky_gradient.png"]
+  },
+  "bg_cave_2d": {
+    "kind": "bg",
+    "desc": "Dark cave parallax background",
+    "files": ["ui_2d/kenney_backgrounds/cave_dark.png"]
+  },
+
+  "ui_button": {
+    "kind": "ui",
+    "desc": "9-patch UI button, neutral color",
+    "files": ["ui_2d/kenney_ui/button_rectangle.png"]
+  },
+  "ui_panel": {
+    "kind": "ui",
+    "desc": "9-patch UI panel for HUD",
+    "files": ["ui_2d/kenney_ui/panel_rectangle.png"]
+  },
+
+  "mesh_hero_humanoid": {
+    "kind": "mesh",
+    "desc": "Stylized low-poly humanoid, ~1.8m tall, facing +Z",
+    "expected_bbox_diagonal_m": 2.0,
+    "files": ["meshes_3d/kenney_mini_chars/character_basic.glb"]
+  },
+  "mesh_hero_robot": {
+    "kind": "mesh",
+    "desc": "Chunky low-poly robot character",
+    "expected_bbox_diagonal_m": 2.0,
+    "files": ["meshes_3d/kenney_mini_chars/character_robot.glb"]
+  },
+  "mesh_prop_rock": {
+    "kind": "mesh",
+    "desc": "Low-poly rock prop, ~1m",
+    "expected_bbox_diagonal_m": 1.2,
+    "files": ["meshes_3d/kenney_nature/rock_large.glb"]
+  },
+  "mesh_prop_tree": {
+    "kind": "mesh",
+    "desc": "Low-poly stylized tree, ~3m",
+    "expected_bbox_diagonal_m": 3.5,
+    "files": ["meshes_3d/kenney_nature/tree_default.glb"]
+  },
+  "mesh_ground_tile_3d": {
+    "kind": "mesh",
+    "desc": "Modular ground tile, 4x4m flat slab",
+    "expected_bbox_diagonal_m": 5.7,
+    "files": ["meshes_3d/kenney_proto/ground_tile.glb"]
+  },
+  "mesh_prop_crate": {
+    "kind": "mesh",
+    "desc": "Low-poly wooden crate, ~1m cube",
+    "expected_bbox_diagonal_m": 1.7,
+    "files": ["meshes_3d/kenney_proto/crate.glb"]
+  },
+  "mesh_pickup_coin_3d": {
+    "kind": "mesh",
+    "desc": "3D coin pickup, ~0.3m",
+    "expected_bbox_diagonal_m": 0.4,
+    "files": ["meshes_3d/kenney_proto/coin.glb"]
+  }
+}

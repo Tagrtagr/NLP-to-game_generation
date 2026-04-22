@@ -26,6 +26,14 @@ export_presets.cfg.local
 # Workspaces (per-session generated game projects)
 backend/workspaces/
 
+# Bundled asset binaries — fetched by scripts/bootstrap.sh, never committed.
+# Only the manifests (manifest.json, sfx_manifest.json) and READMEs are tracked.
+backend/fallback_assets/sprites_2d/
+backend/fallback_assets/tiles_2d/
+backend/fallback_assets/ui_2d/
+backend/fallback_assets/meshes_3d/
+backend/sfx/wav/
+
 # Playwright
 test-results/
 playwright-report/
