@@ -54,11 +54,18 @@ def _assets_dir(session_id: str) -> Path:
     return d
 
 
-def _write_placeholder(asset: Asset, dst: Path) -> None:
+def _hex_to_rgb(h: str) -> tuple[int, int, int]:
+    h = h.lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def _write_placeholder(asset: Asset, dst: Path, palette: list[str] | None = None) -> None:
     """Synthesize a placeholder file when the bundled Kenney asset is missing.
 
-    2D: solid-color PNG (magenta = obviously a placeholder).
-    3D: tiny valid GLB with a single cube.
+    2D: palette-themed gradient/solid, so the game at least stays in-aesthetic
+    instead of shouting magenta. 3D: tiny valid GLB with a single cube.
     """
     if asset.kind == "mesh":
         dst.write_bytes(_cube_glb())
@@ -66,10 +73,32 @@ def _write_placeholder(asset: Asset, dst: Path) -> None:
     w, h = asset.size or (64, 64)
     from PIL import Image, ImageDraw
 
-    img = Image.new("RGBA", (w, h), (255, 64, 200, 255))
+    cols = [_hex_to_rgb(c) for c in (palette or []) if c.startswith("#")]
+    # Fallback neutral palette if design didn't supply one.
+    if not cols:
+        cols = [(26, 32, 42), (46, 77, 74), (92, 138, 122)]
+
+    if asset.kind == "bg":
+        # Vertical gradient from darkest to a mid tone.
+        dark = min(cols, key=sum)
+        mid = cols[len(cols) // 2] if len(cols) > 1 else dark
+        img = Image.new("RGBA", (w, h))
+        for y in range(h):
+            t = y / max(h - 1, 1)
+            r = int(dark[0] * (1 - t) + mid[0] * t)
+            g = int(dark[1] * (1 - t) + mid[1] * t)
+            b = int(dark[2] * (1 - t) + mid[2] * t)
+            for x in range(w):
+                img.putpixel((x, y), (r, g, b, 255))
+    else:
+        # Solid mid tone — inoffensive for sprites/tilesets/ui until real asset loads.
+        c = cols[len(cols) // 2]
+        img = Image.new("RGBA", (w, h), (c[0], c[1], c[2], 255))
+
     draw = ImageDraw.Draw(img)
     label = asset.id[:10]
-    draw.text((2, 2), label, fill=(0, 0, 0, 255))
+    # Readable against any palette.
+    draw.text((2, 2), label, fill=(255, 255, 255, 180))
     img.save(dst, format="PNG")
 
 
@@ -121,7 +150,7 @@ def _cube_glb() -> bytes:
     return header + json_chunk + bin_chunk
 
 
-def _load_fallback(asset: Asset, session_id: str, reason: str) -> ResolvedAsset:
+def _load_fallback(asset: Asset, session_id: str, reason: str, palette: list[str] | None = None) -> ResolvedAsset:
     """Deterministic file copy from fallback_assets/<role file> -> session dir.
 
     Cannot fail in normal operation — the schema validator guarantees
@@ -140,7 +169,7 @@ def _load_fallback(asset: Asset, session_id: str, reason: str) -> ResolvedAsset:
     else:
         # Bootstrap leaves Kenney packs as a manual step. If they're missing,
         # synthesize a placeholder so the pipeline still ships.
-        _write_placeholder(asset, dst)
+        _write_placeholder(asset, dst, palette)
         reason = f"{reason}; bundled fallback missing, using placeholder"
     return ResolvedAsset(
         asset_id=asset.id,
@@ -213,11 +242,12 @@ async def resolve_asset(
     session_id: str,
     style: str,
     breaker: CircuitBreaker,
+    palette: list[str] | None = None,
 ) -> ResolvedAsset:
     service = _service_for(asset.kind)
 
     if breaker.is_open(service):
-        return _load_fallback(asset, session_id, f"{service} circuit open")
+        return _load_fallback(asset, session_id, f"{service} circuit open", palette)
 
     is_mesh = asset.kind == "mesh"
     try:
@@ -228,22 +258,22 @@ async def resolve_asset(
             check_2d_image(data)
     except (TimeoutError, asyncio.TimeoutError) as e:
         breaker.record_failure(service)
-        return _load_fallback(asset, session_id, f"timeout: {e}")
+        return _load_fallback(asset, session_id, f"timeout: {e}", palette)
     except GarbageOutput as e:
         breaker.record_failure(service)
-        return _load_fallback(asset, session_id, f"garbage: {e}")
+        return _load_fallback(asset, session_id, f"garbage: {e}", palette)
     except tripo.ScaleMismatch as e:
         # Not a service-health failure; don't trip the breaker — future meshes
         # may still scale correctly. Just swap in the bundled fallback mesh.
-        return _load_fallback(asset, session_id, f"scale-mismatch: {e}")
+        return _load_fallback(asset, session_id, f"scale-mismatch: {e}", palette)
     except tripo.TripoError as e:
         breaker.record_failure(service)
-        return _load_fallback(asset, session_id, f"tripo: {e}")
+        return _load_fallback(asset, session_id, f"tripo: {e}", palette)
     except NotImplementedError as e:
-        return _load_fallback(asset, session_id, str(e))
+        return _load_fallback(asset, session_id, str(e), palette)
     except Exception as e:
         breaker.record_failure(service)
-        return _load_fallback(asset, session_id, f"{type(e).__name__}: {e}")
+        return _load_fallback(asset, session_id, f"{type(e).__name__}: {e}", palette)
 
     breaker.record_success(service)
     dst_dir = _assets_dir(session_id)
@@ -277,7 +307,13 @@ async def resolve_all(
 
     tasks = [
         asyncio.create_task(
-            resolve_asset(a, session_id=session_id, style=design.art_style, breaker=breaker)
+            resolve_asset(
+                a,
+                session_id=session_id,
+                style=design.art_style,
+                breaker=breaker,
+                palette=design.palette,
+            )
         )
         for a in design.assets
     ]
