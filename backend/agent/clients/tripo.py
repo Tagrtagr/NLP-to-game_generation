@@ -47,6 +47,17 @@ async def _submit(client: httpx.AsyncClient, headers: dict[str, str], prompt: st
     return task_id
 
 
+def _url_of(v: Any) -> str | None:
+    """Tripo sometimes returns {type, url} objects instead of a bare string."""
+    if isinstance(v, str):
+        return v
+    if isinstance(v, dict):
+        u = v.get("url")
+        if isinstance(u, str):
+            return u
+    return None
+
+
 async def _poll(
     client: httpx.AsyncClient, headers: dict[str, str], task_id: str, deadline: float
 ) -> str:
@@ -58,9 +69,15 @@ async def _poll(
         data = resp.json().get("data", {})
         status = data.get("status")
         if status == "success":
-            model_url = (data.get("output") or {}).get("model") or (
-                data.get("result") or {}
-            ).get("model")
+            output = data.get("output") or {}
+            result = data.get("result") or {}
+            model_url = (
+                output.get("model")
+                or output.get("pbr_model")
+                or result.get("model")
+                or _url_of(result.get("pbr_model"))
+                or _url_of(result.get("model"))
+            )
             if not model_url:
                 raise TripoError(f"no model url: {data}")
             return model_url

@@ -9,7 +9,7 @@ export async function* streamGenerate(
   signal: AbortSignal,
   sessionId?: string,
 ): AsyncGenerator<SseEvent> {
-  const res = await fetch("/api/generate", {
+  const res = await fetch("http://localhost:8000/api/generate", {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
     body: JSON.stringify({ prompt, session_id: sessionId ?? null }),

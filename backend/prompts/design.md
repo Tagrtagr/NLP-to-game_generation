@@ -40,7 +40,11 @@ You will be given the full fallback-asset manifest (semantic role → descriptio
 
 The `prompt` on each Asset is sent to gpt-image-1 (2D) or Tripo (3D). Prefix your thinking with the `art_style` and `palette` — every asset prompt should be stylistically consistent. Keep prompts concrete: subject + pose + style + palette (do not repeat the full style, the runner prepends it).
 
-**Art style must be ADAPTIVE and NON-PIXEL.** The `art_style` sentence MUST commit to a concrete illustration lane — e.g. "soft gouache storybook illustration with visible brushwork", "flat vector with thick black outlines and halftone shading", "hand-inked noir with washed ink textures", "paper-cutout collage on grain paper", "risograph print in 3 inks", "chalk pastel on dark paper". **Forbidden:** pixel art, 8-bit, 16-bit, retro pixel, 1-bit, sprite-sheet animation references. Pick whichever illustration style best fits the prompt's mood — this is the single biggest aesthetic lever.
+**Art style — commit to a single concrete lane.** The `art_style` sentence must commit to a specific visual lane in one sentence. Two families are acceptable and the choice should fit the prompt:
+- **Illustrated** (for `bg` + `ui` — handled by gpt-image-1): e.g. "soft gouache storybook with visible brushwork", "flat vector with thick black outlines and halftone shading", "hand-inked noir", "paper-cutout collage", "risograph print in 3 inks", "chalk pastel on dark paper".
+- **Pixel art** (for `sprite` + `tileset` — handled by PixelLab): e.g. "crisp 32×32 pixel art with limited palette and hard edges", "moody 1-bit pixel art", "GBA-era pixel art with dithered shading". Pixel art is the right call whenever the prompt reads retro/arcade/cozy-platformer.
+
+The `sprite` and `tileset` assets go through PixelLab (pixel-art native, good at small native sizes like 32/48/64/96). `bg` and `ui` go through gpt-image-1 (illustrated, large canvas). Within a single design, **keep the pixel-art and illustrated choices coherent** — e.g. pixel sprites on an illustrated painted parallax background works; mismatched retro vs painterly does not.
 
 ## SFX: only keys from sfx_manifest.json
 

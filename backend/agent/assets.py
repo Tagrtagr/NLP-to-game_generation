@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Literal
 
 from .breaker import CircuitBreaker
-from .clients import gpt_image, tripo
+from .clients import gpt_image, pixellab, tripo
 from .events import Event
 from .garbage import GarbageOutput, check_2d_image
 from .manifests import fallback_manifest
@@ -154,16 +154,22 @@ def _load_fallback(asset: Asset, session_id: str, reason: str) -> ResolvedAsset:
 
 
 async def _generate_2d(asset: Asset, style: str) -> bytes:
-    """All 2D assets go through gpt-image-1 with locked art_style + palette.
-
-    Sprites / tiles / UI get transparent backgrounds so they composite cleanly
-    over painted scenes. Backgrounds stay opaque.
+    """Sprites + tilesets → PixelLab (pixel-art, native small sizes).
+    Backgrounds + UI → gpt-image-1 (illustrated, large canvas).
     """
+    if asset.kind in ("sprite", "tileset"):
+        w, h = asset.size or (64, 64)
+        return await asyncio.wait_for(
+            pixellab.generate_sprite(
+                prompt=asset.prompt, width=w, height=h, style=style
+            ),
+            timeout=TIMEOUTS[asset.kind],
+        )
     if asset.kind == "bg":
         w, h = asset.size or (1536, 1024)
         transparent = False
     else:
-        w, h = asset.size or (256, 256)
+        w, h = asset.size or (512, 256)
         transparent = True
     return await asyncio.wait_for(
         gpt_image.generate_image(
@@ -196,6 +202,8 @@ async def _generate_mesh(asset: Asset, style: str) -> bytes:
 def _service_for(kind: AssetKind) -> str:
     if kind == "mesh":
         return tripo.SERVICE_NAME
+    if kind in ("sprite", "tileset"):
+        return pixellab.SERVICE_NAME
     return gpt_image.SERVICE_NAME
 
 

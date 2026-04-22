@@ -62,12 +62,14 @@ export function useGenerate() {
     setState({ ...initialState(), running: true });
 
     try {
+      let sawDone = false;
       for await (const ev of streamGenerate(prompt, ac.signal)) {
         if (ev.event === "session") {
           setState((s) => ({ ...s, sessionId: ev.data }));
           continue;
         }
         if (ev.event === "done") {
+          sawDone = true;
           setState((s) => ({ ...s, running: false }));
           continue;
         }
@@ -80,6 +82,13 @@ export function useGenerate() {
           continue;
         }
         setState((s) => applyPhase(s, pe));
+      }
+      if (!sawDone) {
+        setState((s) => ({
+          ...s,
+          running: false,
+          error: s.error ?? "stream closed unexpectedly (backend reload?)",
+        }));
       }
     } catch (e: any) {
       if (e?.name === "AbortError") return;
