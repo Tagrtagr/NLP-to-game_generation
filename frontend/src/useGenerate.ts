@@ -92,13 +92,22 @@ export function useGenerate() {
   return { state, start, cancel };
 }
 
+const TERMINAL_STEP: Record<PhaseName, string> = {
+  design: "critic",
+  assets: "fanout",
+  synthesize: "sanity",
+  build: "export",
+  qa: "ready",
+};
+
 function applyPhase(s: GenState, pe: PhaseEvent): GenState {
   const phases = { ...s.phases };
   const cur = phases[pe.phase];
+  const isTerminalDone = pe.status === "done" && pe.step === TERMINAL_STEP[pe.phase];
   const nextStatus: PhaseState["status"] =
     pe.status === "error"
       ? "error"
-      : pe.status === "done" && pe.step === "phase"
+      : isTerminalDone
         ? "done"
         : cur.status === "done"
           ? "done"
@@ -106,7 +115,7 @@ function applyPhase(s: GenState, pe: PhaseEvent): GenState {
   phases[pe.phase] = { status: nextStatus, steps: [...cur.steps, pe] };
 
   let assets = s.assets;
-  if (pe.phase === "assets" && pe.step === "asset" && pe.payload) {
+  if (pe.phase === "assets" && pe.step === "asset_ready" && pe.payload) {
     const p = pe.payload as Record<string, unknown>;
     const thumb: AssetThumb = {
       asset_id: String(p.asset_id ?? ""),
