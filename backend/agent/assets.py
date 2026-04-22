@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Literal
 
 from .breaker import CircuitBreaker
-from .clients import pixellab
+from .clients import gpt_image, pixellab, tripo
 from .events import Event
 from .garbage import GarbageOutput, check_2d_image
 from .manifests import fallback_manifest
@@ -33,7 +33,7 @@ TIMEOUTS: dict[AssetKind, float] = {
     "tileset": 25.0,
     "bg": 25.0,
     "ui": 20.0,
-    "mesh": 60.0,  # wired up in step 7 (Tripo)
+    "mesh": 60.0,
 }
 
 
@@ -91,17 +91,38 @@ async def _generate_2d(asset: Asset, style: str) -> bytes:
             timeout=TIMEOUTS[asset.kind],
         )
     if asset.kind == "bg":
-        # gpt-image-1 wiring in step 7. For now, short-circuit to fallback.
-        raise NotImplementedError("bg generation lands in step 7")
+        w, h = asset.size or (1536, 1024)
+        return await asyncio.wait_for(
+            gpt_image.generate_image(
+                prompt=asset.prompt, width=w, height=h, style=style
+            ),
+            timeout=TIMEOUTS["bg"],
+        )
     raise NotImplementedError(f"no 2D generator for kind={asset.kind}")
+
+
+async def _generate_mesh(asset: Asset, style: str) -> bytes:
+    """Tripo text-to-model + scale-sanity + min-size garbage check.
+
+    Raises TripoError / ScaleMismatch on failure — caller converts both into
+    a fallback. 3D gets an aggressive fallback posture: any of these failure
+    modes means we ship the bundled Kenney mesh instead of a mis-scaled
+    black-screen.
+    """
+    data = await asyncio.wait_for(
+        tripo.generate_mesh(prompt=asset.prompt, style=style),
+        timeout=TIMEOUTS["mesh"],
+    )
+    tripo.check_glb(data, asset.expected_bbox)
+    return data
 
 
 def _service_for(kind: AssetKind) -> str:
     if kind in ("sprite", "tileset", "ui"):
         return pixellab.SERVICE_NAME
     if kind == "bg":
-        return "gpt_image"
-    return "tripo"
+        return gpt_image.SERVICE_NAME
+    return tripo.SERVICE_NAME
 
 
 async def resolve_asset(
@@ -116,19 +137,26 @@ async def resolve_asset(
     if breaker.is_open(service):
         return _load_fallback(asset, session_id, f"{service} circuit open")
 
-    if asset.kind == "mesh":
-        # Tripo lands in step 7; use fallback mesh for now.
-        return _load_fallback(asset, session_id, "mesh gen not yet wired")
-
+    is_mesh = asset.kind == "mesh"
     try:
-        data = await _generate_2d(asset, style)
-        check_2d_image(data)
+        if is_mesh:
+            data = await _generate_mesh(asset, style)
+        else:
+            data = await _generate_2d(asset, style)
+            check_2d_image(data)
     except (TimeoutError, asyncio.TimeoutError) as e:
         breaker.record_failure(service)
         return _load_fallback(asset, session_id, f"timeout: {e}")
     except GarbageOutput as e:
         breaker.record_failure(service)
         return _load_fallback(asset, session_id, f"garbage: {e}")
+    except tripo.ScaleMismatch as e:
+        # Not a service-health failure; don't trip the breaker — future meshes
+        # may still scale correctly. Just swap in the bundled fallback mesh.
+        return _load_fallback(asset, session_id, f"scale-mismatch: {e}")
+    except tripo.TripoError as e:
+        breaker.record_failure(service)
+        return _load_fallback(asset, session_id, f"tripo: {e}")
     except NotImplementedError as e:
         return _load_fallback(asset, session_id, str(e))
     except Exception as e:
@@ -137,7 +165,8 @@ async def resolve_asset(
 
     breaker.record_success(service)
     dst_dir = _assets_dir(session_id)
-    dst = dst_dir / f"{asset.id}.png"
+    suffix = ".glb" if is_mesh else ".png"
+    dst = dst_dir / f"{asset.id}{suffix}"
     dst.write_bytes(data)
     return ResolvedAsset(
         asset_id=asset.id,
