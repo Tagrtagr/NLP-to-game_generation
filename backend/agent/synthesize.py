@@ -232,6 +232,7 @@ def sanity_check(project_dir: Path) -> list[str]:
         list(project_dir.rglob("*.gd"))
         + list(project_dir.rglob("*.tscn"))
         + list(project_dir.rglob("*.tres"))
+        + ([proj_godot] if proj_godot.exists() else [])
     ):
         try:
             text = p.read_text()
@@ -242,6 +243,27 @@ def sanity_check(project_dir: Path) -> list[str]:
             target = project_dir / ref[len("res://") :]
             if not target.exists():
                 errs.append(f"{rel}: references missing '{ref}'")
+
+    # Scene/resource files must declare resources as [ext_resource] and
+    # reference them via ExtResource("id") / SubResource("id"). GDScript's
+    # load()/preload() calls parse silently in the editor but fail at
+    # runtime with "Parse error" on line N, producing a blank canvas that
+    # neither export nor asset-path checks catch.
+    for p in list(project_dir.rglob("*.tscn")) + list(project_dir.rglob("*.tres")):
+        try:
+            text = p.read_text()
+        except UnicodeDecodeError:
+            continue
+        rel = p.relative_to(project_dir)
+        for i, line in enumerate(text.splitlines(), 1):
+            s = line.strip()
+            if s.startswith("[") or s.startswith("#") or not s:
+                continue
+            if re.search(r"\b(?:pre)?load\s*\(", s):
+                errs.append(
+                    f"{rel}:{i}: '{s[:60]}' — .tscn/.tres cannot use load()/preload(); "
+                    f"declare as [ext_resource] at top of file and reference via ExtResource(\"id\")"
+                )
 
     return errs
 

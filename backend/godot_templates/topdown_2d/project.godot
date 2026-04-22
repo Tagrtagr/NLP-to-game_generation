@@ -53,5 +53,6 @@ move_down={
 
 [rendering]
 
-renderer/rendering_method="forward_plus"
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
 environment/defaults/default_clear_color=Color(0.16, 0.2, 0.24, 1)
