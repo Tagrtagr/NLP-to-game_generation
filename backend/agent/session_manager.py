@@ -47,6 +47,13 @@ class SessionManager:
         try:
             async for ev in run_pipeline(sess.sid, prompt):
                 sess.publish("phase", ev.model_dump_json(exclude_none=True))
+        except asyncio.CancelledError:
+            sess.publish(
+                "phase",
+                '{"phase":"design","step":"pipeline","status":"error",'
+                '"detail":"cancelled by user"}',
+            )
+            raise
         except Exception as e:
             sess.publish(
                 "phase",
@@ -56,6 +63,13 @@ class SessionManager:
         finally:
             sess.done = True
             sess.publish("done", sess.sid)
+
+    def cancel(self, sid: str) -> bool:
+        sess = self._sessions.get(sid)
+        if sess is None or sess.task is None or sess.done:
+            return False
+        sess.task.cancel()
+        return True
 
     async def stream(self, sid: str) -> "asyncio.Queue | None":
         """Subscribe to a session; replays history then yields live events."""

@@ -49,8 +49,13 @@ const initialState = (): GenState => ({
 export function useGenerate() {
   const [state, setState] = useState<GenState>(initialState);
   const abortRef = useRef<AbortController | null>(null);
+  const sidRef = useRef<string | null>(null);
 
   const cancel = useCallback(() => {
+    const sid = sidRef.current;
+    if (sid) {
+      void fetch(`http://localhost:8000/api/cancel/${sid}`, { method: "POST" }).catch(() => {});
+    }
     abortRef.current?.abort();
     abortRef.current = null;
   }, []);
@@ -65,6 +70,7 @@ export function useGenerate() {
       let sawDone = false;
       for await (const ev of streamGenerate(prompt, ac.signal)) {
         if (ev.event === "session") {
+          sidRef.current = ev.data;
           setState((s) => ({ ...s, sessionId: ev.data }));
           continue;
         }

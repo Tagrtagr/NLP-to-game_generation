@@ -72,6 +72,11 @@ async def resume(sid: str):
     return EventSourceResponse(_drain(q))
 
 
+@app.post("/api/cancel/{sid}")
+async def cancel(sid: str) -> dict[str, bool]:
+    return {"cancelled": MANAGER.cancel(sid)}
+
+
 app.mount(
     "/workspaces",
     StaticFiles(directory=str(WORKSPACES_DIR), html=True),
