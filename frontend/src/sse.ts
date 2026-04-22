@@ -26,10 +26,12 @@ export async function* streamGenerate(
     if (done) break;
     buf += decoder.decode(value, { stream: true });
 
-    let sep: number;
-    while ((sep = buf.indexOf("\n\n")) !== -1) {
+    while (true) {
+      const m = buf.match(/\r?\n\r?\n/);
+      if (!m) break;
+      const sep = m.index!;
       const frame = buf.slice(0, sep);
-      buf = buf.slice(sep + 2);
+      buf = buf.slice(sep + m[0].length);
       const ev = parseFrame(frame);
       if (ev) yield ev;
     }

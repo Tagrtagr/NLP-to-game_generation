@@ -5,8 +5,10 @@ pass them here. No prompt-building logic lives in this module.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import random
 from typing import Any
 
 # Lazy-imported to keep `import agent` cheap at app startup.
@@ -56,7 +58,26 @@ async def claude_json(
     # Opus 4.7 deprecated `temperature`; Sonnet still accepts it.
     if model != CLAUDE_OPUS_MODEL:
         kwargs["temperature"] = temperature
-    resp = await client.messages.create(**kwargs)
+    # Retry on 429 rate-limit: honor retry-after, else exponential backoff.
+    import anthropic
+    delay = 2.0
+    for attempt in range(4):
+        try:
+            resp = await client.messages.create(**kwargs)
+            break
+        except anthropic.RateLimitError as e:
+            retry_after = None
+            hdrs = getattr(getattr(e, "response", None), "headers", None)
+            if hdrs:
+                try:
+                    retry_after = float(hdrs.get("retry-after") or hdrs.get("x-ratelimit-reset") or 0)
+                except ValueError:
+                    retry_after = None
+            wait = retry_after if retry_after and retry_after > 0 else delay + random.uniform(0, 1)
+            if attempt == 3:
+                raise
+            await asyncio.sleep(min(wait, 60.0))
+            delay *= 2
     # Concatenate any text blocks.
     chunks: list[str] = []
     for block in resp.content:

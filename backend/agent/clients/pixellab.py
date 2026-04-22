@@ -40,9 +40,12 @@ async def generate_sprite(
         raise PixelLabError("PIXELLAB_API_KEY not set")
 
     full_prompt = f"{prompt}. {style}" if style else prompt
+    # PixelLab requires a canvas of area >= 32*32 = 1024 pixels. Enlarge
+    # tiny sprites (e.g. 24x24 pickups) to the smallest legal multiple.
+    w, h = max(32, width), max(32, height)
     body = {
         "description": full_prompt,
-        "image_size": {"width": width, "height": height},
+        "image_size": {"width": w, "height": h},
         "no_background": True,
     }
     headers = {"Authorization": f"Bearer {api_key}"}
