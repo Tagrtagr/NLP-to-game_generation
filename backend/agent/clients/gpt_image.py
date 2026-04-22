@@ -62,7 +62,15 @@ async def generate_image(
         raise GptImageError("no b64_json in response")
     data = base64.b64decode(b64)
 
-    if width and height and (width, height) != _size_to_px(size):
+    # Only downscale when the request is at least 256px on every axis.
+    # Sub-256 sizes come from pixel-art-era designs and collapse illustrated
+    # content into near-uniform garbage. Godot handles final scaling.
+    if (
+        width
+        and height
+        and min(width, height) >= 256
+        and (width, height) != _size_to_px(size)
+    ):
         from io import BytesIO
 
         from PIL import Image

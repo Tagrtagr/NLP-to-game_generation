@@ -27,7 +27,7 @@ from pydantic import BaseModel, ValidationError, field_validator
 from .assets import ResolvedAsset
 from .budget import RepairBudget
 from .events import Event
-from .llm import claude_json, extract_json
+from .llm import CLAUDE_SONNET_MODEL, claude_json, extract_json
 from .paths import CONTEXT_DIR, TEMPLATES_DIR, session_dir, session_log_dir
 from .prompts import load_prompt
 from .schema import GameDesign
@@ -60,10 +60,17 @@ class EditPlan(BaseModel):
 
 def _copy_template(design: GameDesign, session_id: str) -> Path:
     src = TEMPLATES_DIR / design.template
-    dst = session_dir(session_id) / "project"
+    sess = session_dir(session_id)
+    dst = sess / "project"
     if dst.exists():
         shutil.rmtree(dst)
     shutil.copytree(src, dst)
+    # Mirror resolved assets + SFX into the project so `res://assets/...` and
+    # `res://sfx/...` paths that synthesize emits actually resolve.
+    for sub in ("assets", "sfx"):
+        src_sub = sess / sub
+        if src_sub.exists():
+            shutil.copytree(src_sub, dst / sub, dirs_exist_ok=True)
     return dst
 
 
@@ -293,7 +300,7 @@ async def run_synthesize(
         )
         try:
             text = await claude_json(
-                system=system, user=user, temperature=0.4, max_tokens=8192
+                system=system, user=user, temperature=0.4, max_tokens=16000, model=CLAUDE_SONNET_MODEL
             )
             raw = extract_json(text)
             plan = EditPlan.model_validate(raw)
@@ -415,7 +422,7 @@ async def repair_from_build_error(
         + stderr[-2500:]
         + "\n\nEmit a corrective edit plan in the same JSON format."
     )
-    text = await claude_json(system=system, user=user, temperature=0.3, max_tokens=8192)
+    text = await claude_json(system=system, user=user, temperature=0.3, max_tokens=16000, model=CLAUDE_SONNET_MODEL)
     raw = extract_json(text)
     plan = EditPlan.model_validate(raw)
     _apply_plan(project_dir, plan)
@@ -468,7 +475,7 @@ async def repair_from_qa_issue(
         " mesh scale or camera.\n\n"
         + "Emit a corrective edit plan in the same JSON format."
     )
-    text = await claude_json(system=system, user=user, temperature=0.3, max_tokens=8192)
+    text = await claude_json(system=system, user=user, temperature=0.3, max_tokens=16000, model=CLAUDE_SONNET_MODEL)
     raw = extract_json(text)
     plan = EditPlan.model_validate(raw)
     _apply_plan(project_dir, plan)

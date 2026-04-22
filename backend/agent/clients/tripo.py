@@ -74,7 +74,7 @@ async def generate_mesh(
     *,
     prompt: str,
     style: str | None = None,
-    timeout: float = 60.0,
+    timeout: float = 150.0,
 ) -> bytes:
     """Submit text-to-model, poll to completion, download GLB. Returns raw bytes."""
     api_key = os.environ.get("TRIPO_API_KEY")

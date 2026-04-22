@@ -33,7 +33,7 @@ TIMEOUTS: dict[AssetKind, float] = {
     "tileset": 35.0,
     "bg": 35.0,
     "ui": 30.0,
-    "mesh": 60.0,
+    "mesh": 150.0,
 }
 
 

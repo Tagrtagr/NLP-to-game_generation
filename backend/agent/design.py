@@ -21,8 +21,8 @@ from .paths import session_log_dir
 from .prompts import load_prompt
 from .schema import GameDesign
 
-TEMPERATURES: tuple[float, ...] = (0.6, 0.85, 1.0)
-MAX_RETRIES_PER_CANDIDATE = 1
+TEMPERATURES: tuple[float, ...] = (0.7,)
+MAX_RETRIES_PER_CANDIDATE = 2
 
 
 def _build_user_prompt(user_prompt: str) -> str:
@@ -125,7 +125,9 @@ async def run_design(
 
     The final yield's GameDesign is the chosen design. Earlier yields have None.
     """
-    yield Event(phase="design", step="fanout", status="start", detail="3 candidates"), None
+    yield Event(
+        phase="design", step="fanout", status="start", detail=f"{len(TEMPERATURES)} candidate(s)"
+    ), None
 
     system = load_prompt("design")
     user = _build_user_prompt(user_prompt)
@@ -146,7 +148,7 @@ async def run_design(
                 phase="design",
                 step="fanout",
                 status="error",
-                detail="all 3 candidates failed validation",
+                detail=f"all {len(TEMPERATURES)} candidate(s) failed validation",
                 payload={"errors": [e[-1] if e else "" for e in errs]},
             ),
             None,
@@ -157,7 +159,7 @@ async def run_design(
         phase="design",
         step="fanout",
         status="progress",
-        detail=f"{len(valid_idxs)}/3 valid; running critic",
+        detail=f"{len(valid_idxs)}/{len(TEMPERATURES)} valid; running critic",
     ), None
 
     valid_designs = [designs[i] for i in valid_idxs]  # type: ignore[list-item]

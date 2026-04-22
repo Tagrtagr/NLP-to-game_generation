@@ -33,7 +33,8 @@ def _gemini():
 
 
 CLAUDE_OPUS_MODEL = "claude-opus-4-7"
-GEMINI_FLASH_MODEL = "gemini-3-flash"
+CLAUDE_SONNET_MODEL = "claude-sonnet-4-6"
+GEMINI_FLASH_MODEL = "gemini-3-flash-preview"
 
 
 async def claude_json(
@@ -42,16 +43,20 @@ async def claude_json(
     user: str,
     temperature: float = 0.7,
     max_tokens: int = 4096,
+    model: str = CLAUDE_OPUS_MODEL,
 ) -> str:
     """Single Claude call returning raw text. Caller parses JSON."""
     client = _anthropic()
-    resp = await client.messages.create(
-        model=CLAUDE_OPUS_MODEL,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        system=system,
-        messages=[{"role": "user", "content": user}],
-    )
+    kwargs: dict = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "system": system,
+        "messages": [{"role": "user", "content": user}],
+    }
+    # Opus 4.7 deprecated `temperature`; Sonnet still accepts it.
+    if model != CLAUDE_OPUS_MODEL:
+        kwargs["temperature"] = temperature
+    resp = await client.messages.create(**kwargs)
     # Concatenate any text blocks.
     chunks: list[str] = []
     for block in resp.content:
