@@ -79,6 +79,39 @@ async def gemini_json(
     return resp.text.strip()
 
 
+async def gemini_vision_json(
+    *,
+    system: str,
+    user: str,
+    images_png: list[bytes],
+    temperature: float = 0.1,
+) -> str:
+    """Multimodal Gemini call: system + user text + N inline PNGs, JSON response."""
+    client = _gemini()
+    parts: list[dict] = [{"text": user}]
+    for data in images_png:
+        import base64
+
+        parts.append(
+            {
+                "inline_data": {
+                    "mime_type": "image/png",
+                    "data": base64.b64encode(data).decode("ascii"),
+                }
+            }
+        )
+    resp = client.models.generate_content(
+        model=GEMINI_FLASH_MODEL,
+        contents=[{"role": "user", "parts": parts}],
+        config={
+            "system_instruction": system,
+            "temperature": temperature,
+            "response_mime_type": "application/json",
+        },
+    )
+    return resp.text.strip()
+
+
 def extract_json(text: str) -> dict[str, Any]:
     """Tolerant JSON extraction: strips ```json fences, trims to first {...} block."""
     t = text.strip()

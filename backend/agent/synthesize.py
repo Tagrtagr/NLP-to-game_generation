@@ -430,3 +430,56 @@ async def repair_from_build_error(
         }
     )
     log_path.write_text(json.dumps(existing, indent=2))
+
+
+async def repair_from_qa_issue(
+    session_id: str,
+    design: GameDesign,
+    resolved_assets: list[ResolvedAsset],
+    resolved_sfx: list[ResolvedSfx],
+    project_dir: Path,
+    issue_kind: str,
+    description: str,
+) -> None:
+    """One-shot patch after visual QA flags a critical rendering issue.
+
+    No sanity loop — the re-export + re-QA will tell us if it stuck.
+    Budget accounting happens in the pipeline, which only calls us when
+    it has already consumed a qa_repair slot from the shared budget.
+    """
+    system = load_prompt("synthesize")
+    tree = _tree_summary(project_dir)
+    ctx = _context_snippets()
+    base = _build_user_prompt(design, resolved_assets, resolved_sfx, tree, ctx)
+    user = (
+        base
+        + "\n\nVisual QA on the freshly-built game flagged a CRITICAL rendering issue.\n"
+        + f"issue_kind: {issue_kind}\n"
+        + f"description: {description}\n\n"
+        + "Likely culprits by issue_kind:\n"
+        + "- blank: main scene not set in project.godot, or camera looking"
+        " the wrong way, or the root node has no visible children.\n"
+        + "- missing_texture: a Sprite2D/MeshInstance3D points at a path"
+        " that doesn't resolve; check every texture/mesh assignment.\n"
+        + "- error_overlay: a runtime error is firing on _ready; fix the"
+        " script causing it.\n"
+        + "- broken_scale: a node's scale or a camera's zoom/position is"
+        " off; do NOT touch collision shapes on the humanoid — only the"
+        " mesh scale or camera.\n\n"
+        + "Emit a corrective edit plan in the same JSON format."
+    )
+    text = await claude_json(system=system, user=user, temperature=0.3, max_tokens=8192)
+    raw = extract_json(text)
+    plan = EditPlan.model_validate(raw)
+    _apply_plan(project_dir, plan)
+    log_path = session_log_dir(session_id) / "synthesize.json"
+    existing = json.loads(log_path.read_text()) if log_path.exists() else []
+    existing.append(
+        {
+            "stage": "qa_repair",
+            "issue_kind": issue_kind,
+            "description": description,
+            "files_applied": [fe.path for fe in plan.files],
+        }
+    )
+    log_path.write_text(json.dumps(existing, indent=2))
