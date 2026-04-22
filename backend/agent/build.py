@@ -8,8 +8,8 @@ the WASM export is single-threaded — no SharedArrayBuffer, no COOP/COEP, works
 in every iframe.
 
 On non-zero exit we feed stderr + touched files back to Claude via synthesize's
-repair path and rebuild — bounded here by `max_repairs` (the pipeline orchestrator
-in step 10 passes whatever's left of the global session budget).
+repair path and rebuild, spending from the shared `RepairBudget` (cap=3 across
+synthesize + build + QA for the whole session).
 """
 from __future__ import annotations
 
@@ -20,8 +20,9 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
 
+from .budget import RepairBudget
 from .events import Event
-from .paths import BACKEND_DIR, session_dir, session_log_dir
+from .paths import BACKEND_DIR, session_log_dir
 
 PRESET_NAME = "Web"
 EXPORT_RELATIVE = "../web/index.html"
@@ -107,19 +108,21 @@ async def run_build(
     session_id: str,
     project_dir: Path,
     *,
-    max_repairs: int = 1,
+    budget: RepairBudget,
     timeout: float = DEFAULT_TIMEOUT,
     repair_fn=None,
 ) -> AsyncIterator[tuple[Event, Path | None]]:
     """Export the project to web. On failure, call repair_fn(stderr) if provided,
-    which should mutate project_dir in place, then retry.
+    which should mutate project_dir in place, then retry. Each retry spends one
+    from the shared RepairBudget; the first attempt is free.
 
     Final yield's path is the web dir (containing index.html) on success, else None.
     """
     web_dir = project_dir.parent / "web"
     attempts: list[dict] = []
+    attempt = 0
 
-    for attempt in range(max_repairs + 1):
+    while True:
         yield (
             Event(
                 phase="build",
@@ -164,21 +167,24 @@ async def run_build(
             )
             return
 
+        can_retry = repair_fn is not None and budget.remaining > 0
         yield (
             Event(
                 phase="build",
                 step="export",
-                status="progress" if attempt < max_repairs else "error",
+                status="progress" if can_retry else "error",
                 detail=(
                     f"rc={result.returncode}; "
-                    + ("repairing" if attempt < max_repairs and repair_fn else "no repair")
+                    + ("repairing" if can_retry else "no repair")
                 ),
                 payload={"stderr_tail": result.stderr[-1200:]},
             ),
             None,
         )
 
-        if attempt >= max_repairs or repair_fn is None:
+        if not can_retry:
+            break
+        if not budget.try_consume(f"build_repair:{attempt + 1}"):
             break
 
         try:
@@ -194,6 +200,7 @@ async def run_build(
                 None,
             )
             break
+        attempt += 1
 
     _log_build(session_id, attempts)
     yield (

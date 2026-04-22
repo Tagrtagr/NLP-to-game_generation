@@ -10,9 +10,9 @@ structural sanity checks:
 - every `res://` reference points to a file that actually exists on disk
 - every `Input.is_action_*("name")` uses an action declared in project.godot
 
-On sanity failure, we feed the specific violations back and ask for a fix —
-bounded here by `max_repairs`. The pipeline orchestrator (step 10) passes
-whatever remains of the session-global repair budget.
+On sanity failure, we feed the specific violations back and ask for a fix,
+spending from the shared `RepairBudget` (cap=3 across synthesize + build +
+QA for the whole session).
 """
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ from pathlib import Path
 from pydantic import BaseModel, ValidationError, field_validator
 
 from .assets import ResolvedAsset
+from .budget import RepairBudget
 from .events import Event
 from .llm import claude_json, extract_json
 from .paths import CONTEXT_DIR, TEMPLATES_DIR, session_dir, session_log_dir
@@ -248,7 +249,7 @@ async def run_synthesize(
     design: GameDesign,
     resolved_assets: list[ResolvedAsset],
     resolved_sfx: list[ResolvedSfx],
-    max_repairs: int = 2,
+    budget: RepairBudget,
 ) -> AsyncIterator[tuple[Event, Path | None]]:
     """Async generator: (Event, project_dir-if-ready).
 
@@ -274,8 +275,13 @@ async def run_synthesize(
 
     log: list[dict] = []
     last_errs: list[str] = []
+    attempt = 0
 
-    for attempt in range(max_repairs + 1):
+    while True:
+        # First attempt is free; every subsequent attempt spends one from the
+        # shared global budget (cap=3 across synthesize+build+qa).
+        if attempt > 0 and not budget.try_consume(f"synthesize_repair:{attempt}"):
+            break
         yield (
             Event(
                 phase="synthesize",
@@ -294,10 +300,9 @@ async def run_synthesize(
         except (ValidationError, ValueError, json.JSONDecodeError) as e:
             last_errs = [f"edit plan did not parse: {e}"]
             log.append({"attempt": attempt, "stage": "parse", "errors": last_errs})
-            if attempt < max_repairs:
-                user = _with_feedback(user, last_errs)
-                continue
-            break
+            user = _with_feedback(user, last_errs)
+            attempt += 1
+            continue
         except Exception as e:
             yield (
                 Event(
@@ -316,10 +321,9 @@ async def run_synthesize(
         except ValueError as e:
             last_errs = [str(e)]
             log.append({"attempt": attempt, "stage": "apply", "errors": last_errs})
-            if attempt < max_repairs:
-                user = _with_feedback(user, last_errs)
-                continue
-            break
+            user = _with_feedback(user, last_errs)
+            attempt += 1
+            continue
 
         yield (
             Event(
@@ -355,8 +359,6 @@ async def run_synthesize(
             return
 
         last_errs = errs
-        if attempt >= max_repairs:
-            break
         user = _with_feedback(user, errs)
         yield (
             Event(
@@ -368,6 +370,7 @@ async def run_synthesize(
             ),
             None,
         )
+        attempt += 1
 
     _write_log(session_id, log)
     yield (
@@ -375,7 +378,7 @@ async def run_synthesize(
             phase="synthesize",
             step="sanity",
             status="error",
-            detail=f"sanity failures after {max_repairs} repairs",
+            detail=f"sanity failures; budget remaining={budget.remaining}",
             payload={"errors": last_errs[:10]},
         ),
         project_dir,
@@ -384,3 +387,46 @@ async def run_synthesize(
 
 def _write_log(session_id: str, log: list[dict]) -> None:
     (session_log_dir(session_id) / "synthesize.json").write_text(json.dumps(log, indent=2))
+
+
+async def repair_from_build_error(
+    session_id: str,
+    design: GameDesign,
+    resolved_assets: list[ResolvedAsset],
+    resolved_sfx: list[ResolvedSfx],
+    project_dir: Path,
+    stderr: str,
+) -> None:
+    """One-shot patch after a godot export failure.
+
+    Reads the current (post-first-synthesize) project tree, pairs it with
+    the export stderr, asks Claude for a corrective edit plan, applies it.
+    No sanity loop — the export will re-run and tell us if it's still broken.
+    Budget accounting lives in run_build, which calls us at most once per
+    retry it spends.
+    """
+    system = load_prompt("synthesize")
+    tree = _tree_summary(project_dir)
+    ctx = _context_snippets()
+    base = _build_user_prompt(design, resolved_assets, resolved_sfx, tree, ctx)
+    user = (
+        base
+        + "\n\nThe previous export failed. godot --export-release stderr tail:\n"
+        + stderr[-2500:]
+        + "\n\nEmit a corrective edit plan in the same JSON format."
+    )
+    text = await claude_json(system=system, user=user, temperature=0.3, max_tokens=8192)
+    raw = extract_json(text)
+    plan = EditPlan.model_validate(raw)
+    _apply_plan(project_dir, plan)
+    # Append to the same log file for traceability.
+    log_path = session_log_dir(session_id) / "synthesize.json"
+    existing = json.loads(log_path.read_text()) if log_path.exists() else []
+    existing.append(
+        {
+            "stage": "build_repair",
+            "stderr_tail": stderr[-1000:],
+            "files_applied": [fe.path for fe in plan.files],
+        }
+    )
+    log_path.write_text(json.dumps(existing, indent=2))
