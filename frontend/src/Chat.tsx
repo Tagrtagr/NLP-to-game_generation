@@ -1,0 +1,88 @@
+import { useState, type FormEvent } from "react";
+import { PhaseCard } from "./PhaseCard";
+import { PHASE_ORDER } from "./types";
+import type { GenState } from "./useGenerate";
+
+export function Chat({
+  state,
+  onSubmit,
+  onCancel,
+}: {
+  state: GenState;
+  onSubmit: (prompt: string) => void;
+  onCancel: () => void;
+}) {
+  const [prompt, setPrompt] = useState("");
+
+  function submit(e: FormEvent) {
+    e.preventDefault();
+    const p = prompt.trim();
+    if (!p || state.running) return;
+    onSubmit(p);
+  }
+
+  return (
+    <aside className="w-2/5 min-w-[380px] max-w-[560px] border-r border-neutral-800 flex flex-col">
+      <div className="p-4 border-b border-neutral-800">
+        <h1 className="text-lg font-semibold">Godot Agent</h1>
+        <p className="text-xs text-neutral-400 mt-1">
+          Describe a game. Watch it build. Play it.
+        </p>
+      </div>
+
+      <div className="flex-1 overflow-auto p-4 space-y-2">
+        {PHASE_ORDER.map((p) => (
+          <PhaseCard
+            key={p}
+            phase={p}
+            state={state.phases[p]}
+            assets={p === "assets" ? state.assets : undefined}
+          />
+        ))}
+
+        {state.budgetUsed > 0 && (
+          <div className="text-xs text-amber-400/80 px-1">
+            Repair budget: {state.budgetUsed}/3 used
+            {state.budgetTrace.length > 0 && ` (${state.budgetTrace.join(", ")})`}
+          </div>
+        )}
+
+        {state.error && (
+          <div className="text-xs text-rose-400 px-1">Error: {state.error}</div>
+        )}
+      </div>
+
+      <form onSubmit={submit} className="p-3 border-t border-neutral-800 space-y-2">
+        <textarea
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+          rows={3}
+          placeholder="a cozy 2D platformer where a cat collects yarn balls"
+          disabled={state.running}
+          className="w-full resize-none rounded bg-neutral-900 border border-neutral-800 p-2 text-sm focus:outline-none focus:border-neutral-600 disabled:opacity-50"
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submit(e);
+          }}
+        />
+        <div className="flex gap-2">
+          <button
+            type="submit"
+            disabled={state.running || !prompt.trim()}
+            className="flex-1 rounded bg-amber-500 text-neutral-950 text-sm font-medium py-2 hover:bg-amber-400 disabled:bg-neutral-800 disabled:text-neutral-500"
+          >
+            {state.running ? "Generating…" : "Generate"}
+          </button>
+          {state.running && (
+            <button
+              type="button"
+              onClick={onCancel}
+              className="rounded border border-neutral-700 text-sm px-3 hover:bg-neutral-900"
+            >
+              Cancel
+            </button>
+          )}
+        </div>
+      </form>
+    </aside>
+  );
+}
