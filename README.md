@@ -4,6 +4,8 @@ Turn a single natural-language prompt into a playable Godot 4.5.1 game, streamed
 
 Target: **2–3 min common-case, up to ~5 min worst-case with repairs**. SSE streams every phase — design tokens, asset thumbnails, code file writes, build stdout, QA screenshots — so slow feels *progressing*, not stuck.
 
+> **Reviewer notes:** [`WRITEUP.md`](WRITEUP.md) / [`WRITEUP.pdf`](WRITEUP.pdf) — single-document summary of pipeline, decisions, bugs encountered during build, and next steps.
+
 ## Research lineage
 
 This agent is a direct implementation of a recognizable research pattern. Credited explicitly because the architecture choices come from these papers, not from scratch:
@@ -34,7 +36,25 @@ cd backend && uv run uvicorn app:app --reload    # localhost:8000
 cd frontend && npm run dev                       # localhost:5173
 ```
 
-Required env vars in `backend/.env`: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` (for `gpt-image-1`), `GEMINI_API_KEY`, `TRIPO_API_KEY`. Pipeline will surface a clear error per missing key rather than failing silently.
+Required env vars in `backend/.env`: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` (for `gpt-image-1`), `GEMINI_API_KEY`, `TRIPO_API_KEY`, `PIXELLAB_API_KEY`. Pipeline will surface a clear error per missing key rather than failing silently.
+
+### Canonical test prompts
+
+Three prompts that exercise the full matrix:
+
+- **Specific 2D** → *"a cozy 2D platformer where a cat collects yarn balls"* — routes to `platformer_2d`, exercises PixelLab sprites, tileset, shader.
+- **Specific 3D** → *"third-person explorer on a floating island"* — routes to `walker_3d`, exercises Tripo meshes, sky-gradient shader, camera rig.
+- **Vague** → *"make something fun"* — exercises the design-phase rescue path: schema forces the model to commit to one verb, one style, one template.
+
+### Replaying past runs
+
+Every session persists under `backend/workspaces/<sid>/` (gitignored) and is static-served. Open `http://localhost:8000/workspaces/<sid>/web/index.html` to replay any prior generation without regenerating. `GET /api/stream/<sid>` also replays the full SSE event history (new subscribers get history before live events).
+
+### Approximate cost per run
+
+- **2D (platformer_2d / topdown_2d):** ~$0.30–0.60. Dominated by Opus design + Sonnet synthesize; PixelLab sprites are cheap; 3–5 `gpt-image-1` calls at ~$0.04 each.
+- **3D (walker_3d):** ~$0.60–1.20. Tripo v2.5 fast mode dominates ($0.10–0.30 per mesh × 5 meshes); Sonnet repair loops can add another Opus/Sonnet call or two.
+- **Vague prompt rescue:** +1 re-sample if design validation fails; ~$0.05 delta.
 
 ## Architecture
 
