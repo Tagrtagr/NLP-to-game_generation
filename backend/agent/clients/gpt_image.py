@@ -35,6 +35,7 @@ async def generate_image(
     width: int | None = None,
     height: int | None = None,
     style: str | None = None,
+    transparent: bool = False,
     timeout: float = 25.0,
 ) -> bytes:
     api_key = os.environ.get("OPENAI_API_KEY")
@@ -46,10 +47,11 @@ async def generate_image(
     client = AsyncOpenAI(api_key=api_key, timeout=timeout)
     full_prompt = f"{prompt}. {style}" if style else prompt
     size = _pick_size(width, height)
+    kwargs: dict = {"model": MODEL, "prompt": full_prompt, "size": size, "n": 1}
+    if transparent:
+        kwargs["background"] = "transparent"
     try:
-        resp = await client.images.generate(
-            model=MODEL, prompt=full_prompt, size=size, n=1
-        )
+        resp = await client.images.generate(**kwargs)
     except Exception as e:
         raise GptImageError(f"{type(e).__name__}: {e}") from e
 
@@ -58,4 +60,21 @@ async def generate_image(
     b64 = resp.data[0].b64_json
     if not b64:
         raise GptImageError("no b64_json in response")
-    return base64.b64decode(b64)
+    data = base64.b64decode(b64)
+
+    if width and height and (width, height) != _size_to_px(size):
+        from io import BytesIO
+
+        from PIL import Image
+
+        img = Image.open(BytesIO(data)).convert("RGBA")
+        img = img.resize((width, height), Image.LANCZOS)
+        out = BytesIO()
+        img.save(out, format="PNG")
+        data = out.getvalue()
+    return data
+
+
+def _size_to_px(size: str) -> tuple[int, int]:
+    w, _, h = size.partition("x")
+    return int(w), int(h)

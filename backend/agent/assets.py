@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Literal
 
 from .breaker import CircuitBreaker
-from .clients import gpt_image, pixellab, tripo
+from .clients import gpt_image, tripo
 from .events import Event
 from .garbage import GarbageOutput, check_2d_image
 from .manifests import fallback_manifest
@@ -29,10 +29,10 @@ from .schema import Asset, AssetKind, GameDesign
 Source = Literal["generated", "fallback"]
 
 TIMEOUTS: dict[AssetKind, float] = {
-    "sprite": 20.0,
-    "tileset": 25.0,
-    "bg": 25.0,
-    "ui": 20.0,
+    "sprite": 35.0,
+    "tileset": 35.0,
+    "bg": 35.0,
+    "ui": 30.0,
     "mesh": 60.0,
 }
 
@@ -54,6 +54,73 @@ def _assets_dir(session_id: str) -> Path:
     return d
 
 
+def _write_placeholder(asset: Asset, dst: Path) -> None:
+    """Synthesize a placeholder file when the bundled Kenney asset is missing.
+
+    2D: solid-color PNG (magenta = obviously a placeholder).
+    3D: tiny valid GLB with a single cube.
+    """
+    if asset.kind == "mesh":
+        dst.write_bytes(_cube_glb())
+        return
+    w, h = asset.size or (64, 64)
+    from PIL import Image, ImageDraw
+
+    img = Image.new("RGBA", (w, h), (255, 64, 200, 255))
+    draw = ImageDraw.Draw(img)
+    label = asset.id[:10]
+    draw.text((2, 2), label, fill=(0, 0, 0, 255))
+    img.save(dst, format="PNG")
+
+
+def _cube_glb() -> bytes:
+    """Minimal valid GLB containing a unit cube. Used as 3D placeholder."""
+    import json as _json
+    import struct
+
+    # 8 vertices of a unit cube, 12 triangles.
+    verts = [
+        (-0.5, -0.5, -0.5), (0.5, -0.5, -0.5), (0.5, 0.5, -0.5), (-0.5, 0.5, -0.5),
+        (-0.5, -0.5, 0.5), (0.5, -0.5, 0.5), (0.5, 0.5, 0.5), (-0.5, 0.5, 0.5),
+    ]
+    idxs = [
+        0, 1, 2, 0, 2, 3,  4, 6, 5, 4, 7, 6,
+        0, 4, 5, 0, 5, 1,  1, 5, 6, 1, 6, 2,
+        2, 6, 7, 2, 7, 3,  3, 7, 4, 3, 4, 0,
+    ]
+    vbuf = b"".join(struct.pack("<fff", *v) for v in verts)
+    ibuf = b"".join(struct.pack("<H", i) for i in idxs)
+    # pad index buffer to 4 bytes
+    while len(ibuf) % 4:
+        ibuf += b"\x00"
+    bin_data = vbuf + ibuf
+    gltf = {
+        "asset": {"version": "2.0"},
+        "scene": 0,
+        "scenes": [{"nodes": [0]}],
+        "nodes": [{"mesh": 0}],
+        "meshes": [{"primitives": [{"attributes": {"POSITION": 0}, "indices": 1, "mode": 4}]}],
+        "buffers": [{"byteLength": len(bin_data)}],
+        "bufferViews": [
+            {"buffer": 0, "byteOffset": 0, "byteLength": len(vbuf), "target": 34962},
+            {"buffer": 0, "byteOffset": len(vbuf), "byteLength": len(idxs) * 2, "target": 34963},
+        ],
+        "accessors": [
+            {"bufferView": 0, "componentType": 5126, "count": len(verts), "type": "VEC3",
+             "min": [-0.5, -0.5, -0.5], "max": [0.5, 0.5, 0.5]},
+            {"bufferView": 1, "componentType": 5123, "count": len(idxs), "type": "SCALAR"},
+        ],
+    }
+    gjson = _json.dumps(gltf, separators=(",", ":")).encode("utf-8")
+    while len(gjson) % 4:
+        gjson += b" "
+    json_chunk = struct.pack("<II", len(gjson), 0x4E4F534A) + gjson
+    bin_chunk = struct.pack("<II", len(bin_data), 0x004E4942) + bin_data
+    total = 12 + len(json_chunk) + len(bin_chunk)
+    header = struct.pack("<III", 0x46546C67, 2, total)
+    return header + json_chunk + bin_chunk
+
+
 def _load_fallback(asset: Asset, session_id: str, reason: str) -> ResolvedAsset:
     """Deterministic file copy from fallback_assets/<role file> -> session dir.
 
@@ -68,7 +135,13 @@ def _load_fallback(asset: Asset, session_id: str, reason: str) -> ResolvedAsset:
     src = FALLBACK_DIR / files[0]
     dst_dir = _assets_dir(session_id)
     dst = dst_dir / f"{asset.id}{src.suffix}"
-    shutil.copyfile(src, dst)
+    if src.exists():
+        shutil.copyfile(src, dst)
+    else:
+        # Bootstrap leaves Kenney packs as a manual step. If they're missing,
+        # synthesize a placeholder so the pipeline still ships.
+        _write_placeholder(asset, dst)
+        reason = f"{reason}; bundled fallback missing, using placeholder"
     return ResolvedAsset(
         asset_id=asset.id,
         role=asset.role,
@@ -81,24 +154,27 @@ def _load_fallback(asset: Asset, session_id: str, reason: str) -> ResolvedAsset:
 
 
 async def _generate_2d(asset: Asset, style: str) -> bytes:
-    """Dispatch 2D generation by kind. Raises on failure."""
-    if asset.kind in ("sprite", "tileset", "ui"):
-        w, h = asset.size or (64, 64)
-        return await asyncio.wait_for(
-            pixellab.generate_sprite(
-                prompt=asset.prompt, width=w, height=h, style=style
-            ),
-            timeout=TIMEOUTS[asset.kind],
-        )
+    """All 2D assets go through gpt-image-1 with locked art_style + palette.
+
+    Sprites / tiles / UI get transparent backgrounds so they composite cleanly
+    over painted scenes. Backgrounds stay opaque.
+    """
     if asset.kind == "bg":
         w, h = asset.size or (1536, 1024)
-        return await asyncio.wait_for(
-            gpt_image.generate_image(
-                prompt=asset.prompt, width=w, height=h, style=style
-            ),
-            timeout=TIMEOUTS["bg"],
-        )
-    raise NotImplementedError(f"no 2D generator for kind={asset.kind}")
+        transparent = False
+    else:
+        w, h = asset.size or (256, 256)
+        transparent = True
+    return await asyncio.wait_for(
+        gpt_image.generate_image(
+            prompt=asset.prompt,
+            width=w,
+            height=h,
+            style=style,
+            transparent=transparent,
+        ),
+        timeout=TIMEOUTS[asset.kind],
+    )
 
 
 async def _generate_mesh(asset: Asset, style: str) -> bytes:
@@ -118,11 +194,9 @@ async def _generate_mesh(asset: Asset, style: str) -> bytes:
 
 
 def _service_for(kind: AssetKind) -> str:
-    if kind in ("sprite", "tileset", "ui"):
-        return pixellab.SERVICE_NAME
-    if kind == "bg":
-        return gpt_image.SERVICE_NAME
-    return tripo.SERVICE_NAME
+    if kind == "mesh":
+        return tripo.SERVICE_NAME
+    return gpt_image.SERVICE_NAME
 
 
 async def resolve_asset(

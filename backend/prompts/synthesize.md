@@ -24,7 +24,8 @@ Your job: customize the template into the GameDesign, emitting a single JSON obj
 
 # Required behavior
 
-- Implement at least one shader from `GameDesign.shaders` as a `.gdshader` file, applied via `ShaderMaterial` to the target node (or as a full-screen CanvasLayer post-process for `target == "post_process"`). Feed palette hex codes as shader uniforms.
+- Implement at least one shader from `GameDesign.shaders` as a `.gdshader` file, applied via `ShaderMaterial` to a sprite / mesh / tile material. Feed palette hex codes as shader uniforms.
+- **SHADER RESTRICTION (hard).** Do NOT emit any fullscreen post-process shader. Do NOT sample `SCREEN_TEXTURE` or `screen_texture` in any shader. Do NOT create a `BackBufferCopy` node. Do NOT create a fullscreen `ColorRect` with a shader under a `CanvasLayer`. These patterns white-screen the Godot web export. If `GameDesign.shaders` contains a `target == "post_process"` entry, reinterpret it: apply the same visual intent (palette tint, outline, dither) to the player sprite material and key sprites instead. Shaders are allowed ONLY on node materials for specific sprites / meshes / tiles — never as a fullscreen overlay.
 - Wire `GameDesign.sfx_map`: load each resolved SFX into an `AudioStreamPlayer` (or `AudioStreamPlayer2D/3D`) and trigger it at the gameplay event named in the key.
 - Every mechanic in `GameDesign.mechanics` must have working code — no TODO stubs.
 - Every scene in `scene_flow` must be reachable via the declared transitions; at least the `gameplay` scene must be fully playable.

@@ -38,7 +38,9 @@ If you want a template outside this list (rhythm, card, tycoon), **pick the clos
 
 You will be given the full fallback-asset manifest (semantic role → description) further down this prompt. **Every Asset you emit must pick a `fallback_role` from that manifest**, matching its `kind` (sprite/tileset/bg/mesh/ui). For 3D meshes, also set `expected_bbox` in meters (humanoid ~1.8–2.0m, prop crate ~1m, large tree ~3m) — the asset phase uses this for Tripo scale-sanity.
 
-The `prompt` on each Asset is what gets sent to PixelLab / gpt-image-1 / Tripo. Prefix your thinking with the `art_style` and `palette` — every asset prompt should be stylistically consistent. Keep prompts concrete: subject + pose + style + palette (do not repeat the full style, the runner prepends it).
+The `prompt` on each Asset is sent to gpt-image-1 (2D) or Tripo (3D). Prefix your thinking with the `art_style` and `palette` — every asset prompt should be stylistically consistent. Keep prompts concrete: subject + pose + style + palette (do not repeat the full style, the runner prepends it).
+
+**Art style must be ADAPTIVE and NON-PIXEL.** The `art_style` sentence MUST commit to a concrete illustration lane — e.g. "soft gouache storybook illustration with visible brushwork", "flat vector with thick black outlines and halftone shading", "hand-inked noir with washed ink textures", "paper-cutout collage on grain paper", "risograph print in 3 inks", "chalk pastel on dark paper". **Forbidden:** pixel art, 8-bit, 16-bit, retro pixel, 1-bit, sprite-sheet animation references. Pick whichever illustration style best fits the prompt's mood — this is the single biggest aesthetic lever.
 
 ## SFX: only keys from sfx_manifest.json
 
@@ -46,74 +48,132 @@ You will be given the full SFX manifest. `sfx_map` values must be keys from it �
 
 ## Shaders: at least one
 
-Always include ≥1 shader. Free aesthetic lift. Valid kinds: `crt`, `water`, `outline`, `dither`, `sky` (3D only), `palette_lock` (post-process). Target can be a node path, or `"post_process"` for fullscreen.
+Always include ≥1 shader. Free aesthetic lift. Valid kinds: `outline`, `water`, `dither`, `sky` (3D only), `wobble`, `hue_shift`. Target MUST be a node path to a specific sprite/mesh/tile material. **Do NOT use `palette_lock` or `crt` or `"post_process"` targets** — fullscreen post-process shaders break on Godot web export and are banned by the synthesize prompt.
 
-## Worked examples
+## Schema (EVERY field below is required unless marked optional)
 
-### Example A — vague prompt rescued
+Your output must be a single JSON object with EXACTLY these fields. Wrong shape = hard rejection by the validator.
 
-**User:** "make something fun"
-
-**Output (abbreviated, fields only):**
-```json
+```
 {
-  "dimension": "2D",
-  "template": "platformer_2d",
-  "title": "Spools",
-  "pitch": "A tiny robot cat threads a yarn-line across rooftops, dodging wind gusts.",
-  "narrative_framing": "The grandmother's knitting fell off the fire-escape. Fetch it.",
-  "scope": "short",
-  "core_verb": "swing",
-  "mechanics": ["grappling yarn swing", "wind gusts that shove you mid-air", "collect spools"],
-  "art_style": "Chunky 32px pixel art in warm dusk palette, thick outlines, CRT softness.",
-  "palette": ["#1a1325", "#f26d78", "#f5c97b", "#7cc6c9", "#eae1c6"],
-  "juice": ["screen shake on wind gust", "hitstop on spool-catch", "dust particles on landing", "yarn-line wobbles like spring"],
-  "shaders": [{"target": "post_process", "kind": "crt", "params": {"curvature": 0.08}}]
+  "dimension":         "2D" | "3D",
+  "template":          "platformer_2d" | "topdown_2d" | "walker_3d" | "shooter_2d" | "puzzle_2d" | "adventure_3d",
+  "title":             string (1..60 chars),
+  "pitch":             string (1..240 chars, one sentence),
+  "narrative_framing": string (1-2 sentences, voice/tone),
+  "scope":             "micro" | "short" | "medium",
+  "controls":          { "<action>": "<input>", ... }  // e.g. {"move":"WASD","jump":"space","interact":"E"}
+  "core_verb":         string (single verb),
+  "mechanics":         [ string, ... ]  // 1..5 entries, ordered by centrality
+  "win_condition":     string (concrete — "reach the goal flag", "collect all 7 yarn balls"),
+  "lose_condition":    string | null  (optional),
+  "camera": {
+    "kind":   "fixed" | "follow" | "topdown" | "third_person" | "orbit",
+    "params": { "<name>": <number>, ... }   // optional numeric params (zoom, offset_y, distance, pitch, etc.)
+  },
+  "scene_flow": [                              // ARRAY of objects — NOT a dict, NOT an array of strings
+    { "id": "title",    "kind": "title",    "transitions": ["gameplay"] },
+    { "id": "gameplay", "kind": "gameplay", "transitions": ["win","lose"] },
+    { "id": "win",      "kind": "win",      "transitions": ["gameplay"] },
+    { "id": "lose",     "kind": "lose",     "transitions": ["gameplay"] }
+  ],
+  // Each scene_flow item MUST have all three keys: id (string), kind (one of title/gameplay/win/lose), transitions (array of scene ids).
+  // At least one entry with kind="gameplay" is REQUIRED.
+  "signals": [                                  // may be [] but field must exist
+    { "name": "yarn_collected", "emitter": "Yarn", "listeners": ["HUD","Player"], "payload_schema": {"count":"int"} }
+  ],
+  "art_style":   string (≥20 chars, ONE committed sentence),
+  "palette":     [ "#RRGGBB", ... ]            // 4..6 entries, each a hex color
+  "juice":       [ string, ... ]               // ≥3 entries, concrete (not "feels good")
+  "assets": [
+    {
+      "id":            string,
+      "role":          string,                 // human-readable role ("player cat", "grandmother napping bg")
+      "kind":          "sprite" | "tileset" | "bg" | "mesh" | "ui",
+      "prompt":        string,                 // sent to PixelLab / gpt-image-1 / Tripo
+      "size":          [w, h] | null,          // pixel size for 2D; null for 3D
+      "expected_bbox": number | null,          // meters, REQUIRED for kind="mesh", else null
+      "fallback_role": string                  // MUST be a key in the fallback manifest below, and its kind must match
+    }
+  ],
+  "shaders": [
+    { "target": "<NodePath or 'post_process'>", "kind": "crt"|"water"|"outline"|"dither"|"sky"|"palette_lock", "params": {...} }
+  ],
+  "sfx_map": { "<gameplay_event>": "<key from sfx_manifest>", ... }
 }
 ```
 
-### Example B — specific prompt, keep the voice
+**Common shape mistakes the validator will reject:**
+- `scene_flow` as a list of strings (`["title","gameplay"]`) — WRONG. Must be list of objects with `id`/`kind`/`transitions`.
+- `scene_flow` as a dict (`{"entry":"title","scenes":{...}}`) — WRONG. Must be a list.
+- `camera.kind` with invented values like `"side_scroll_follow"`, `"follow_2d"`, `"third_person_locked"` — WRONG. Only the 5 enum values above.
+- Omitting `controls` or `win_condition` — both REQUIRED.
+- `palette` entries not starting with `#`, or fewer than 4 / more than 6.
+- `juice` with <3 entries.
+- `sfx_map` values that aren't keys in the injected SFX manifest.
+- `fallback_role` on an asset that isn't a key in the injected fallback manifest (or whose kind mismatches).
 
-**User:** "a cozy 2D platformer where a cat collects yarn balls"
+## Complete worked example
 
-**Output (abbreviated):**
+**User prompt:** "a cozy 2D platformer where a cat collects yarn balls"
+
 ```json
 {
   "dimension": "2D",
   "template": "platformer_2d",
   "title": "Sunday Nap Heist",
   "pitch": "A cat pads through a grandmother's sunlit sitting room, pocketing yarn balls before she wakes.",
-  "narrative_framing": "The clock tocks. Don't let it tick.",
+  "narrative_framing": "The clock tocks. Don't let it tick. Grandmother's nap is short and your paws are soft.",
   "scope": "short",
+  "controls": {"move": "A/D or arrow keys", "jump": "space", "pounce": "shift"},
   "core_verb": "pounce",
-  "mechanics": ["silent walk", "pounce-jump (double jump with tail flick)", "collect 7 yarn balls before the timer"],
-  "art_style": "Hand-painted gouache textures, warm afternoon light, no outlines, saturated ochres and teals.",
+  "mechanics": [
+    "silent walk with pounce-jump (double jump, tail flick on second press)",
+    "collect 7 yarn balls scattered across the room",
+    "clock audibly ticks faster as time drops; if it hits 0 grandmother wakes"
+  ],
+  "win_condition": "Collect all 7 yarn balls before the nap timer expires.",
+  "lose_condition": "Nap timer expires before the 7th yarn ball is collected.",
+  "camera": {"kind": "follow", "params": {"zoom": 1.4, "offset_y": -20}},
+  "scene_flow": [
+    {"id": "title",    "kind": "title",    "transitions": ["gameplay"]},
+    {"id": "gameplay", "kind": "gameplay", "transitions": ["win", "lose"]},
+    {"id": "win",      "kind": "win",      "transitions": ["gameplay"]},
+    {"id": "lose",     "kind": "lose",     "transitions": ["gameplay"]}
+  ],
+  "signals": [
+    {"name": "yarn_collected", "emitter": "YarnBall", "listeners": ["HUD", "GameState"], "payload_schema": {"remaining": "int"}},
+    {"name": "nap_expired",    "emitter": "NapTimer", "listeners": ["GameState"],        "payload_schema": {}}
+  ],
+  "art_style": "Hand-painted gouache textures, warm afternoon light, no hard outlines, saturated ochres and teals, dust motes in sunbeams.",
   "palette": ["#f2d6a4", "#d49561", "#7b4e32", "#5c7d6a", "#2c2320"],
-  "juice": ["tail-flick particles on jump", "clock ticks louder as time drops", "camera zooms on pickup", "yarn balls bob and bounce"]
+  "juice": [
+    "tail-flick particles on pounce",
+    "camera zooms and hitstops 80ms on yarn pickup",
+    "clock tick SFX pitches up over last 10 seconds",
+    "yarn balls bob and gently rotate idle"
+  ],
+  "assets": [
+    {"id": "cat",        "role": "player cat",                 "kind": "sprite",  "prompt": "small tabby cat, side profile, walk and pounce cycle, hand-painted gouache", "size": [64, 64],   "expected_bbox": null, "fallback_role": "player_sprite_platformer"},
+    {"id": "yarn",       "role": "collectible yarn ball",      "kind": "sprite",  "prompt": "red yarn ball with loose thread, soft highlight, gouache",                     "size": [32, 32],   "expected_bbox": null, "fallback_role": "pickup_sprite"},
+    {"id": "tiles_room", "role": "sitting-room floor & walls", "kind": "tileset", "prompt": "warm wood floorboards + patterned wallpaper tiles, gouache",                  "size": [256, 256], "expected_bbox": null, "fallback_role": "tileset_ground_platformer"},
+    {"id": "bg_parlor",  "role": "parallax parlor background", "kind": "bg",      "prompt": "cozy sitting room with a napping grandmother in an armchair, warm sunbeams", "size": [1280, 720],"expected_bbox": null, "fallback_role": "bg_platformer"}
+  ],
+  "shaders": [
+    {"target": "post_process", "kind": "palette_lock", "params": {"strength": 0.85}},
+    {"target": "post_process", "kind": "crt",          "params": {"curvature": 0.06, "scanline_alpha": 0.12}}
+  ],
+  "sfx_map": {
+    "jump":          "jump_soft",
+    "pickup_yarn":   "pickup_coin",
+    "win":           "win_jingle",
+    "lose":          "hit_player",
+    "ui_click":      "ui_click"
+  }
 }
 ```
 
-### Example C — 3D prompt committed
-
-**User:** "third-person explorer on a floating island"
-
-**Output (abbreviated):**
-```json
-{
-  "dimension": "3D",
-  "template": "walker_3d",
-  "title": "Wren, Above",
-  "pitch": "A small courier walks the ruins of a sky-island, delivering three letters to three shrines.",
-  "narrative_framing": "The wind here remembers names. Tell it yours.",
-  "scope": "short",
-  "core_verb": "deliver",
-  "mechanics": ["walk + jump", "pick up letter at start of each zone", "drop letter at shrine Area3D to win zone"],
-  "art_style": "Low-poly stylized, flat-shaded, cloudy pastel sky, geometry-only (no textures), golden-hour rim light.",
-  "palette": ["#eaddc7", "#c27a7a", "#4a6a7e", "#2d3e47", "#f2c75c"],
-  "juice": ["camera dips on landing", "grass instances sway toward player", "letter pickup spawns paper particles"],
-  "shaders": [{"target": "WorldEnvironment", "kind": "sky", "params": {"top": "#4a6a7e", "horizon": "#eaddc7"}}]
-}
-```
+Mirror the shape of this example exactly. Rename fields to match the new prompt's content, but keep every key present and every type identical. For 3D prompts, pick `walker_3d` or `adventure_3d`, set `camera.kind` to `"third_person"` or `"orbit"`, use `kind: "mesh"` assets with a real `expected_bbox` in meters, and add a `sky` shader.
 
 ## Injected context (filled in per request)
 
