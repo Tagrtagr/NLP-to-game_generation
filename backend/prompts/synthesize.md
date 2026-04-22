@@ -28,7 +28,15 @@ Your job: customize the template into the GameDesign, emitting a single JSON obj
 - Wire `GameDesign.sfx_map`: load each resolved SFX into an `AudioStreamPlayer` (or `AudioStreamPlayer2D/3D`) and trigger it at the gameplay event named in the key.
 - Every mechanic in `GameDesign.mechanics` must have working code — no TODO stubs.
 - Every scene in `scene_flow` must be reachable via the declared transitions; at least the `gameplay` scene must be fully playable.
-- Juice items from `GameDesign.juice` are implemented concretely (screen shake via camera offset, particles via `GPUParticles2D/3D`, hitstop via `Engine.time_scale`, flashes via modulate lerp — not prose).
+- Juice items from `GameDesign.juice` are implemented concretely (particles via `GPUParticles2D/3D`, hitstop via `Engine.time_scale`, flashes via modulate lerp — not prose). For screen shake, call `ScreenShake.kick(amount, duration)` — the autoload is registered in every tier-1 template; don't re-implement camera jitter.
+
+# Frequent mistakes (avoid)
+
+- Declaring an `Input` action in a script without adding it to `project.godot` `[input]`. The sanity checker will reject the plan.
+- Creating a `ShaderMaterial` resource but forgetting to attach it (`material = SubResource("...")` on the target node). See `shader_snippets.md` "How to wire a shader".
+- Referencing a path like `res://assets/player.png` when the resolved manifest actually ships it at `res://assets/player_sprite.png`. Use the exact `res_path` from the manifest.
+- Replacing collision shapes on walker_3d's humanoid — swap only the MeshInstance3D's mesh. The per-template notes spell this out.
+- Emitting only a diff / partial file content. Each emitted `content` field is the FULL file body that will overwrite the existing file.
 
 # Output format
 

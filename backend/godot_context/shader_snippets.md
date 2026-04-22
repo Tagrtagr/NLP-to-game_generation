@@ -2,6 +2,28 @@
 
 Each snippet is a drop-in starting point. Tune uniforms from the `GameDesign.palette`.
 
+## How to wire a shader (read this first)
+
+Skipping these steps is the single most common synthesize failure.
+
+- **canvas_item post-process (crt / dither / palette_lock / chromatic / grain)**: add a
+  full-screen `ColorRect` as a child of a `CanvasLayer` (so it renders above the
+  game), `anchor_right=1.0 anchor_bottom=1.0`, set `material` to a new
+  `ShaderMaterial` pointing at a `.gdshader` resource. Post-process shaders read
+  `SCREEN_TEXTURE` — requires a CanvasLayer `layer=1` or greater.
+- **canvas_item sprite material (outline / water)**: assign the `ShaderMaterial`
+  directly to the `Sprite2D.material` (or `TileMap.material` for a whole layer).
+  Sprite shaders read `TEXTURE`, not `SCREEN_TEXTURE`.
+- **sky (3D)**: assign the `ShaderMaterial` to `WorldEnvironment.environment.sky.sky_material`.
+  Do NOT put `shader_type sky` on anything else.
+- Writing a `ShaderMaterial` resource inline in a `.tscn` works — `shader =
+  SubResource("ShaderRes")` where the SubResource is `type="Shader"` with
+  `code = "..."`. Keep the shader body in an unquoted triple-quoted string
+  inside the tscn's SubResource.
+- Palette uniforms: pass `GameDesign.palette` hex values as `Color` directly from
+  GDScript at `_ready` (`$PostFX.material.set_shader_parameter("palette", [...])`)
+  — cleaner than baking colors into the shader source.
+
 ## crt (canvas_item, post-process)
 
 ```gdshader
@@ -98,6 +120,44 @@ uniform float softness : hint_range(0.0, 1.0) = 0.5;
 void sky() {
     float t = smoothstep(-softness, softness, EYEDIR.y);
     COLOR = mix(bottom_color, top_color, t);
+}
+```
+
+## chromatic aberration (canvas_item post-process — split RGB at screen edges)
+
+Cheap cinematic juice, especially good under CRT or on hit/damage flashes.
+Drive `amount` via Tween from a signal handler for impact moments.
+
+```gdshader
+shader_type canvas_item;
+uniform float amount : hint_range(0.0, 0.02) = 0.003;
+
+void fragment() {
+    vec2 dir = SCREEN_UV - vec2(0.5);
+    float r = texture(SCREEN_TEXTURE, SCREEN_UV - dir * amount).r;
+    float g = texture(SCREEN_TEXTURE, SCREEN_UV).g;
+    float b = texture(SCREEN_TEXTURE, SCREEN_UV + dir * amount).b;
+    COLOR = vec4(r, g, b, 1.0);
+}
+```
+
+## film grain (canvas_item post-process — TIME-animated noise overlay)
+
+Warms up flat palettes without touching art.
+
+```gdshader
+shader_type canvas_item;
+uniform float strength : hint_range(0.0, 0.5) = 0.08;
+
+float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+void fragment() {
+    vec3 c = texture(SCREEN_TEXTURE, SCREEN_UV).rgb;
+    float n = hash(FRAGCOORD.xy + vec2(TIME * 13.37));
+    c += (n - 0.5) * strength;
+    COLOR = vec4(c, 1.0);
 }
 ```
 
