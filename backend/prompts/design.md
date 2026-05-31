@@ -27,12 +27,23 @@ Pick ONE. Each is a working Godot 4.5.1 project that later phases will customize
 
 - `platformer_2d` (2D) — side-scrolling, CharacterBody2D with coyote/jump-buffer, collect + reach-goal. Best for: precision platforming, chase, climb, dodge.
 - `topdown_2d` (2D, tier-2) — top-down movement, grid or free. Best for: collect-a-thon, RPG lite, maze, stealth.
-- `shooter_2d` (2D, tier-2) — side/vertical scrolling shooter, projectile pool. Best for: shmup, bullet-hell-lite, wave survival.
-- `puzzle_2d` (2D, tier-2) — grid-based tile puzzle. Best for: match/sort/align/push puzzles.
 - `walker_3d` (3D) — third-person CharacterBody3D walker, flat ground + obstacles, follow-cam. Best for: exploration, fetch-quest, platformer-in-3D, short narrative walker.
-- `adventure_3d` (3D, stretch) — larger world, fixed cam. Best for: zones-with-goals games.
+
+If the user says "top-down", "top down", "maze", "stealth", or asks for 4-way/8-way movement, choose `topdown_2d`, not `platformer_2d`. If the user says "platformer", "side-scroller", "jump", or "climb", choose `platformer_2d`.
 
 If you want a template outside this list (rhythm, card, tycoon), **pick the closest** and note the compromise in `pitch`. Don't invent a template id.
+
+## Canonical controls (hard contract)
+
+Use these exact gameplay controls in `controls`; do not invent movement schemes:
+
+- `platformer_2d`: `{"move":"A/D or left/right arrows","jump":"Space, W, or up arrow"}`
+- `topdown_2d`: `{"move":"WASD or arrow keys","dash":"Space"}`
+- `walker_3d`: `{"move":"WASD or arrow keys","jump":"Space"}`
+
+You may describe extra context-sensitive actions only if the game truly implements them, but movement must always be on arrow keys plus WASD. Do not use mouse input, pointer lock, or hidden controls.
+
+Design the first playable objective so it can be reached using only the canonical controls. Top-down collectibles must be reachable by 4-way/8-way movement; do not require jumping in a top-down game.
 
 ## Assets: every asset gets a fallback_role
 
@@ -52,7 +63,7 @@ You will be given the full SFX manifest. `sfx_map` values must be keys from it �
 
 ## Shaders: at least one
 
-Always include ≥1 shader. Free aesthetic lift. Valid kinds: `outline`, `water`, `dither`, `sky` (3D only), `wobble`, `hue_shift`. Target MUST be a node path to a specific sprite/mesh/tile material. **Do NOT use `palette_lock` or `crt` or `"post_process"` targets** — fullscreen post-process shaders break on Godot web export and are banned by the synthesize prompt.
+Always include ≥1 shader. Free aesthetic lift. Valid kinds: `outline`, `water`, `dither`, `sky` (3D only). Target MUST be a node path to a specific sprite/mesh/tile/sky material. **Do NOT use `palette_lock` or `crt` or `"post_process"` targets** — fullscreen post-process shaders break on Godot web export and are banned by the synthesize prompt.
 
 ## Schema (EVERY field below is required unless marked optional)
 
@@ -61,12 +72,12 @@ Your output must be a single JSON object with EXACTLY these fields. Wrong shape 
 ```
 {
   "dimension":         "2D" | "3D",
-  "template":          "platformer_2d" | "topdown_2d" | "walker_3d" | "shooter_2d" | "puzzle_2d" | "adventure_3d",
+  "template":          "platformer_2d" | "topdown_2d" | "walker_3d",
   "title":             string (1..60 chars),
   "pitch":             string (1..240 chars, one sentence),
   "narrative_framing": string (1-2 sentences, voice/tone),
   "scope":             "micro" | "short" | "medium",
-  "controls":          { "<action>": "<input>", ... }  // e.g. {"move":"WASD","jump":"space","interact":"E"}
+  "controls":          { "<action>": "<input>", ... }  // MUST match canonical controls for the selected template.
   "core_verb":         string (single verb),
   "mechanics":         [ string, ... ]  // 1..5 entries, ordered by centrality
   "win_condition":     string (concrete — "reach the goal flag", "collect all 7 yarn balls"),
@@ -101,7 +112,7 @@ Your output must be a single JSON object with EXACTLY these fields. Wrong shape 
     }
   ],
   "shaders": [
-    { "target": "<NodePath or 'post_process'>", "kind": "crt"|"water"|"outline"|"dither"|"sky"|"palette_lock", "params": {...} }
+    { "target": "<specific NodePath>", "kind": "water"|"outline"|"dither"|"sky", "params": {...} }
   ],
   "sfx_map": { "<gameplay_event>": "<key from sfx_manifest>", ... }
 }
@@ -129,7 +140,7 @@ Your output must be a single JSON object with EXACTLY these fields. Wrong shape 
   "pitch": "A cat pads through a grandmother's sunlit sitting room, pocketing yarn balls before she wakes.",
   "narrative_framing": "The clock tocks. Don't let it tick. Grandmother's nap is short and your paws are soft.",
   "scope": "short",
-  "controls": {"move": "A/D or arrow keys", "jump": "space", "pounce": "shift"},
+  "controls": {"move": "A/D or left/right arrows", "jump": "Space, W, or up arrow"},
   "core_verb": "pounce",
   "mechanics": [
     "silent walk with pounce-jump (double jump, tail flick on second press)",
@@ -159,13 +170,13 @@ Your output must be a single JSON object with EXACTLY these fields. Wrong shape 
   ],
   "assets": [
     {"id": "cat",        "role": "player cat",                 "kind": "sprite",  "prompt": "small tabby cat, side profile, walk and pounce cycle, hand-painted gouache", "size": [64, 64],   "expected_bbox": null, "fallback_role": "player_sprite_platformer"},
-    {"id": "yarn",       "role": "collectible yarn ball",      "kind": "sprite",  "prompt": "red yarn ball with loose thread, soft highlight, gouache",                     "size": [32, 32],   "expected_bbox": null, "fallback_role": "pickup_sprite"},
-    {"id": "tiles_room", "role": "sitting-room floor & walls", "kind": "tileset", "prompt": "warm wood floorboards + patterned wallpaper tiles, gouache",                  "size": [256, 256], "expected_bbox": null, "fallback_role": "tileset_ground_platformer"},
-    {"id": "bg_parlor",  "role": "parallax parlor background", "kind": "bg",      "prompt": "cozy sitting room with a napping grandmother in an armchair, warm sunbeams", "size": [1280, 720],"expected_bbox": null, "fallback_role": "bg_platformer"}
+    {"id": "yarn",       "role": "collectible yarn ball",      "kind": "sprite",  "prompt": "red yarn ball with loose thread, soft highlight, gouache",                     "size": [32, 32],   "expected_bbox": null, "fallback_role": "pickup_sprite_generic"},
+    {"id": "tiles_room", "role": "sitting-room floor & walls", "kind": "tileset", "prompt": "warm wood floorboards + patterned wallpaper tiles, gouache",                  "size": [256, 256], "expected_bbox": null, "fallback_role": "tile_grass_2d"},
+    {"id": "bg_parlor",  "role": "parallax parlor background", "kind": "bg",      "prompt": "cozy sitting room with a napping grandmother in an armchair, warm sunbeams", "size": [1280, 720],"expected_bbox": null, "fallback_role": "bg_sky_2d"}
   ],
   "shaders": [
-    {"target": "post_process", "kind": "palette_lock", "params": {"strength": 0.85}},
-    {"target": "post_process", "kind": "crt",          "params": {"curvature": 0.06, "scanline_alpha": 0.12}}
+    {"target": "Player/Sprite2D", "kind": "outline", "params": {"width": 1.5}},
+    {"target": "YarnBall/Sprite2D", "kind": "dither", "params": {"threshold": 0.08}}
   ],
   "sfx_map": {
     "jump":          "jump_soft",
@@ -177,7 +188,7 @@ Your output must be a single JSON object with EXACTLY these fields. Wrong shape 
 }
 ```
 
-Mirror the shape of this example exactly. Rename fields to match the new prompt's content, but keep every key present and every type identical. For 3D prompts, pick `walker_3d` or `adventure_3d`, set `camera.kind` to `"third_person"` or `"orbit"`, use `kind: "mesh"` assets with a real `expected_bbox` in meters, and add a `sky` shader.
+Mirror the shape of this example exactly. Rename fields to match the new prompt's content, but keep every key present and every type identical. For 3D prompts, pick `walker_3d`, set `camera.kind` to `"third_person"` or `"orbit"`, use `kind: "mesh"` assets with a real `expected_bbox` in meters, and add a `sky` shader.
 
 ## Injected context (filled in per request)
 

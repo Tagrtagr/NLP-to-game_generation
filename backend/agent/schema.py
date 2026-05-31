@@ -11,18 +11,29 @@ TemplateId = Literal[
     "platformer_2d",
     "topdown_2d",
     "walker_3d",
-    "shooter_2d",
-    "puzzle_2d",
-    "adventure_3d",
 ]
 Scope = Literal["micro", "short", "medium"]
 CameraKind = Literal["fixed", "follow", "topdown", "third_person", "orbit"]
 AssetKind = Literal["sprite", "tileset", "bg", "mesh", "ui"]
-ShaderKind = Literal["water", "crt", "outline", "dither", "sky", "palette_lock"]
+ShaderKind = Literal["water", "outline", "dither", "sky"]
 SceneKind = Literal["title", "gameplay", "win", "lose"]
 
-TEMPLATES_2D: set[TemplateId] = {"platformer_2d", "topdown_2d", "shooter_2d", "puzzle_2d"}
-TEMPLATES_3D: set[TemplateId] = {"walker_3d", "adventure_3d"}
+TEMPLATES_2D: set[TemplateId] = {"platformer_2d", "topdown_2d"}
+TEMPLATES_3D: set[TemplateId] = {"walker_3d"}
+CANONICAL_CONTROLS: dict[TemplateId, dict[str, str]] = {
+    "platformer_2d": {
+        "move": "A/D or left/right arrows",
+        "jump": "Space, W, or up arrow",
+    },
+    "topdown_2d": {
+        "move": "WASD or arrow keys",
+        "dash": "Space",
+    },
+    "walker_3d": {
+        "move": "WASD or arrow keys",
+        "jump": "Space",
+    },
+}
 
 
 class CameraSpec(BaseModel):
@@ -82,9 +93,16 @@ class Asset(BaseModel):
 
 
 class Shader(BaseModel):
-    target: str = Field(description="Node path or 'post_process' for fullscreen")
+    target: str = Field(description="Node path for a specific sprite, mesh, tile, or sky material")
     kind: ShaderKind
     params: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("target")
+    @classmethod
+    def _no_post_process_target(cls, v: str) -> str:
+        if v == "post_process":
+            raise ValueError("post_process shaders are banned for web export; target a concrete node")
+        return v
 
 
 class GameDesign(BaseModel):
@@ -145,6 +163,19 @@ class GameDesign(BaseModel):
             errs.append(f"dimension=2D but template '{self.template}' is not a 2D template")
         if self.dimension == "3D" and self.template not in TEMPLATES_3D:
             errs.append(f"dimension=3D but template '{self.template}' is not a 3D template")
+        canonical = CANONICAL_CONTROLS[self.template]
+        missing_controls = [key for key in canonical if key not in self.controls]
+        if missing_controls:
+            errs.append(
+                f"template '{self.template}' controls must include canonical action(s): "
+                f"{missing_controls}; use {canonical}"
+            )
+        if "move" in self.controls and "arrow" not in self.controls["move"].lower():
+            errs.append("controls.move must explicitly include arrow keys")
+        if "jump" in canonical and "space" not in self.controls.get("jump", "").lower():
+            errs.append("controls.jump must explicitly include Space")
+        if "dash" in canonical and "space" not in self.controls.get("dash", "").lower():
+            errs.append("controls.dash must explicitly include Space")
         kinds = {s.kind for s in self.scene_flow}
         if "gameplay" not in kinds:
             errs.append("scene_flow must contain at least one 'gameplay' scene")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+import os
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -18,11 +19,19 @@ WORKSPACES_DIR.mkdir(exist_ok=True)
 
 load_dotenv(BACKEND_DIR / ".env")
 
+
+def _cors_origins() -> list[str]:
+    configured = os.environ.get("CORS_ALLOW_ORIGINS", "")
+    origins = [o.strip() for o in configured.split(",") if o.strip()]
+    if origins:
+        return origins
+    return ["http://localhost:5173", "http://127.0.0.1:5173"]
+
 app = FastAPI(title="Godot Agent")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
