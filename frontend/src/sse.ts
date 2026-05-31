@@ -2,6 +2,8 @@
 // Parses text/event-stream framing: events are separated by blank lines;
 // each line is either `event: <name>` or `data: <payload>`.
 
+import { backendUrl } from "./config";
+
 export type SseEvent = { event: string; data: string };
 
 export async function* streamGenerate(
@@ -9,7 +11,7 @@ export async function* streamGenerate(
   signal: AbortSignal,
   sessionId?: string,
 ): AsyncGenerator<SseEvent> {
-  const res = await fetch("http://localhost:8000/api/generate", {
+  const res = await fetch(backendUrl("/api/generate"), {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
     body: JSON.stringify({ prompt, session_id: sessionId ?? null }),

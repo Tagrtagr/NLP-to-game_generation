@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from "react";
+import { backendUrl } from "./config";
 import { streamGenerate } from "./sse";
 import type { PhaseEvent, PhaseName } from "./types";
 
@@ -8,6 +9,7 @@ export type AssetThumb = {
   kind: string;
   source: "generated" | "fallback";
   rel_path: string;
+  url?: string;
   error?: string;
 };
 
@@ -20,6 +22,9 @@ export type GenState = {
   running: boolean;
   sessionId: string | null;
   webRel: string | null;
+  title: string | null;
+  template: string | null;
+  controls: Record<string, string>;
   phases: Record<PhaseName, PhaseState>;
   assets: AssetThumb[];
   budgetUsed: number;
@@ -39,6 +44,9 @@ const initialState = (): GenState => ({
   running: false,
   sessionId: null,
   webRel: null,
+  title: null,
+  template: null,
+  controls: {},
   phases: initialPhases(),
   assets: [],
   budgetUsed: 0,
@@ -54,7 +62,7 @@ export function useGenerate() {
   const cancel = useCallback(() => {
     const sid = sidRef.current;
     if (sid) {
-      void fetch(`http://localhost:8000/api/cancel/${sid}`, { method: "POST" }).catch(() => {});
+      void fetch(backendUrl(`/api/cancel/${sid}`), { method: "POST" }).catch(() => {});
     }
     abortRef.current?.abort();
     abortRef.current = null;
@@ -138,14 +146,34 @@ function applyPhase(s: GenState, pe: PhaseEvent): GenState {
       kind: String(p.kind ?? ""),
       source: (p.source as AssetThumb["source"]) ?? "generated",
       rel_path: String(p.rel_path ?? ""),
+      url: p.url ? String(p.url) : undefined,
       error: p.error ? String(p.error) : undefined,
     };
     assets = [...assets, thumb];
   }
 
   let webRel = s.webRel;
+  let title = s.title;
+  let template = s.template;
+  let controls = s.controls;
   let budgetUsed = s.budgetUsed;
   let budgetTrace = s.budgetTrace;
+  if (pe.phase === "design" && pe.step === "critic" && pe.payload) {
+    const p = pe.payload as Record<string, unknown>;
+    const design = p.design as Record<string, unknown> | undefined;
+    if (design) {
+      if (typeof design.title === "string") title = design.title;
+      if (typeof design.template === "string") template = design.template;
+      if (design.controls && typeof design.controls === "object" && !Array.isArray(design.controls)) {
+        controls = Object.fromEntries(
+          Object.entries(design.controls as Record<string, unknown>).map(([key, value]) => [
+            key,
+            String(value),
+          ]),
+        );
+      }
+    }
+  }
   if (pe.phase === "qa" && pe.step === "ready" && pe.payload) {
     const p = pe.payload as Record<string, unknown>;
     if (typeof p.web_rel === "string") webRel = p.web_rel;
@@ -156,5 +184,5 @@ function applyPhase(s: GenState, pe: PhaseEvent): GenState {
   const error =
     pe.status === "error" && pe.step === "pipeline" ? pe.detail ?? "pipeline error" : s.error;
 
-  return { ...s, phases, assets, webRel, budgetUsed, budgetTrace, error };
+  return { ...s, phases, assets, webRel, title, template, controls, budgetUsed, budgetTrace, error };
 }

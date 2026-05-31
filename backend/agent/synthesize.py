@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -30,7 +31,7 @@ from .events import Event
 from .llm import CLAUDE_SONNET_MODEL, claude_json, extract_json
 from .paths import CONTEXT_DIR, TEMPLATES_DIR, session_dir, session_log_dir
 from .prompts import load_prompt
-from .schema import GameDesign
+from .schema import GameDesign, TemplateId
 from .sfx import ResolvedSfx
 
 MAX_CONTEXT_FILE_BYTES = 40_000
@@ -160,6 +161,27 @@ def _apply_plan(project_dir: Path, plan: EditPlan) -> list[str]:
     return applied
 
 
+def _apply_repair_plan(
+    project_dir: Path, plan: EditPlan, template: TemplateId | None = None
+) -> list[str]:
+    """Apply a repair atomically and require the project to stay structurally sane."""
+    backup = project_dir.parent / f"._repair_backup_{uuid.uuid4().hex}"
+    shutil.copytree(project_dir, backup)
+    try:
+        applied = _apply_plan(project_dir, plan)
+        errs = sanity_check(project_dir, template=template)
+        if errs:
+            raise ValueError("repair produced sanity errors:\n" + "\n".join(f"- {e}" for e in errs[:20]))
+    except Exception:
+        if project_dir.exists():
+            shutil.rmtree(project_dir)
+        shutil.move(str(backup), str(project_dir))
+        raise
+    else:
+        shutil.rmtree(backup)
+        return applied
+
+
 # --------------------------------------------------------------------------- #
 # Sanity checks                                                               #
 # --------------------------------------------------------------------------- #
@@ -167,8 +189,51 @@ def _apply_plan(project_dir: Path, plan: EditPlan) -> list[str]:
 
 _RES_PATH_RE = re.compile(r"""["'](res://[^"']+)["']""")
 _ACTION_RE = re.compile(
-    r"""is_action_(?:pressed|just_pressed|just_released)\(\s*["']([^"']+)["']\s*\)"""
+    r"""Input\.(?:is_action_(?:pressed|just_pressed|just_released)|get_action_strength)\(\s*["']([^"']+)["']\s*\)"""
 )
+_GET_AXIS_RE = re.compile(
+    r"""Input\.get_axis\(\s*["']([^"']+)["']\s*,\s*["']([^"']+)["']\s*\)"""
+)
+_GET_VECTOR_RE = re.compile(
+    r"""Input\.get_vector\(\s*["']([^"']+)["']\s*,\s*["']([^"']+)["']\s*,\s*["']([^"']+)["']\s*,\s*["']([^"']+)["']\s*\)"""
+)
+_ONREADY_DOLLAR_PATH_RE = re.compile(
+    r"""@onready\s+var\s+[^=\n]+=\s*\$(?:"([^"\n]+)"|([A-Za-z0-9_./%-]+))"""
+)
+_PROJECT_MAIN_SCENE_RE = re.compile(r'run/main_scene\s*=\s*"([^"]+)"')
+_ARROW_KEY_BY_ACTION = {
+    "move_left": 4194319,
+    "move_right": 4194321,
+    "move_up": 4194320,
+    "move_down": 4194322,
+    "move_forward": 4194320,
+    "move_back": 4194322,
+}
+_TEMPLATE_REQUIRED_ACTIONS: dict[TemplateId, set[str]] = {
+    "platformer_2d": {"move_left", "move_right", "jump"},
+    "topdown_2d": {"move_left", "move_right", "move_up", "move_down"},
+    "walker_3d": {"move_left", "move_right", "move_forward", "move_back", "jump"},
+}
+_TEMPLATE_REQUIRED_KEYCODES: dict[TemplateId, dict[str, set[int]]] = {
+    "platformer_2d": {
+        "move_left": {65, 4194319},
+        "move_right": {68, 4194321},
+        "jump": {32, 87, 4194320},
+    },
+    "topdown_2d": {
+        "move_left": {65, 4194319},
+        "move_right": {68, 4194321},
+        "move_up": {87, 4194320},
+        "move_down": {83, 4194322},
+    },
+    "walker_3d": {
+        "move_left": {65, 4194319},
+        "move_right": {68, 4194321},
+        "move_forward": {87, 4194320},
+        "move_back": {83, 4194322},
+        "jump": {32},
+    },
+}
 
 
 def _gd_has_extends(text: str) -> bool:
@@ -190,6 +255,15 @@ def _balanced(text: str, pairs: list[tuple[str, str]]) -> list[str]:
     return errs
 
 
+def _input_actions_in_text(text: str) -> list[str]:
+    actions = list(_ACTION_RE.findall(text))
+    for negative, positive in _GET_AXIS_RE.findall(text):
+        actions.extend([negative, positive])
+    for left, right, up, down in _GET_VECTOR_RE.findall(text):
+        actions.extend([left, right, up, down])
+    return actions
+
+
 def _parse_input_actions(project_godot_text: str) -> set[str]:
     in_input = False
     actions: set[str] = set()
@@ -205,16 +279,173 @@ def _parse_input_actions(project_godot_text: str) -> set[str]:
     return actions
 
 
-def sanity_check(project_dir: Path) -> list[str]:
+def _parse_input_action_keycodes(project_godot_text: str) -> dict[str, set[int]]:
+    in_input = False
+    current_action: str | None = None
+    braces = 0
+    keycodes: dict[str, set[int]] = {}
+    for line in project_godot_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            in_input = stripped == "[input]"
+            current_action = None
+            braces = 0
+            continue
+        if not in_input:
+            continue
+        if current_action is None:
+            m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*=", line)
+            if not m:
+                continue
+            current_action = m.group(1)
+            keycodes.setdefault(current_action, set())
+            braces = line.count("{") - line.count("}")
+        else:
+            braces += line.count("{") - line.count("}")
+        if current_action is not None:
+            for code in re.findall(r'"physical_keycode"\s*:\s*(\d+)', line):
+                keycodes[current_action].add(int(code))
+            if braces <= 0 and "}" in line:
+                current_action = None
+                braces = 0
+    return keycodes
+
+
+def _parse_autoloads(project_godot_text: str) -> dict[str, str]:
+    in_autoload = False
+    autoloads: dict[str, str] = {}
+    for line in project_godot_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            in_autoload = stripped == "[autoload]"
+            continue
+        if not in_autoload:
+            continue
+        m = re.match(r'^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*"\*?([^"]+)"', line)
+        if m:
+            autoloads[m.group(1)] = m.group(2)
+    return autoloads
+
+
+def _parse_scene_nodes(scene_text: str) -> tuple[dict[str, str], dict[str, str]]:
+    ext_scripts: dict[str, str] = {}
+    nodes: dict[str, str] = {}
+    node_scripts: dict[str, str] = {}
+    current_node_path: str | None = None
+    root_path: str | None = None
+
+    for line in scene_text.splitlines():
+        ext = re.match(r'^\[ext_resource\s+([^\]]+)\]', line)
+        if ext:
+            attrs = dict(re.findall(r'(\w+)=("[^"]*"|[^\s]+)', ext.group(1)))
+            if attrs.get("type", "").strip('"') == "Script":
+                path = attrs.get("path", "").strip('"')
+                ext_id = attrs.get("id", "").strip('"')
+                if path and ext_id:
+                    ext_scripts[ext_id] = path
+            continue
+
+        node = re.match(r'^\[node\s+([^\]]+)\]', line)
+        if node:
+            attrs = dict(re.findall(r'(\w+)=("[^"]*"|[^\s]+)', node.group(1)))
+            raw_name = attrs.get("name", "").strip('"')
+            raw_parent = attrs.get("parent", "").strip('"')
+            if not raw_name:
+                current_node_path = None
+                continue
+            if not raw_parent:
+                current_node_path = raw_name
+                root_path = raw_name
+            elif raw_parent == ".":
+                current_node_path = f"{root_path}/{raw_name}" if root_path else raw_name
+            else:
+                current_node_path = (
+                    f"{root_path}/{raw_parent}/{raw_name}" if root_path else f"{raw_parent}/{raw_name}"
+                )
+            nodes[current_node_path] = raw_name
+            continue
+
+        if current_node_path is not None:
+            script = re.match(r'^\s*script\s*=\s*ExtResource\("([^"]+)"\)', line)
+            if script and script.group(1) in ext_scripts:
+                node_scripts[current_node_path] = ext_scripts[script.group(1)]
+
+    return nodes, node_scripts
+
+
+def _resolve_relative_node_path(nodes: dict[str, str], owner_path: str, ref_path: str) -> bool:
+    if (
+        not ref_path
+        or ref_path.startswith("/")
+        or ref_path.startswith("%")
+        or ":" in ref_path
+    ):
+        return True
+    parts = owner_path.split("/") if owner_path else []
+    for part in ref_path.split("/"):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            if parts:
+                parts.pop()
+            continue
+        parts.append(part)
+    return "/".join(parts) in nodes
+
+
+def _scene_script_owners(project_dir: Path) -> tuple[dict[str, list[tuple[Path, str, dict[str, str]]]], list[str]]:
+    owners: dict[str, list[tuple[Path, str, dict[str, str]]]] = {}
+    errs: list[str] = []
+    for scene in project_dir.rglob("*.tscn"):
+        try:
+            text = scene.read_text()
+        except UnicodeDecodeError:
+            continue
+        nodes, node_scripts = _parse_scene_nodes(text)
+        for owner_path, script_res_path in node_scripts.items():
+            if not script_res_path.startswith("res://"):
+                continue
+            script_path = project_dir / script_res_path[len("res://") :]
+            if not script_path.exists():
+                rel = scene.relative_to(project_dir)
+                errs.append(f"{rel}: script ExtResource references missing '{script_res_path}'")
+                continue
+            owners.setdefault(str(script_path.resolve()), []).append((scene, owner_path, nodes))
+    return owners, errs
+
+
+def sanity_check(project_dir: Path, template: TemplateId | None = None) -> list[str]:
     errs: list[str] = []
 
     proj_godot = project_dir / "project.godot"
     actions: set[str] = set()
+    action_keycodes: dict[str, set[int]] = {}
+    project_text = ""
     if proj_godot.exists():
-        actions = _parse_input_actions(proj_godot.read_text())
+        project_text = proj_godot.read_text()
+        actions = _parse_input_actions(project_text)
+        action_keycodes = _parse_input_action_keycodes(project_text)
+        autoloads = _parse_autoloads(project_text)
+        for name, path in {
+            "ReadySignal": "res://autoload/ready_signal.gd",
+            "ScreenShake": "res://autoload/screen_shake.gd",
+        }.items():
+            if autoloads.get(name) != path:
+                errs.append(f"project.godot: missing [autoload] registration for {name}={path}")
+        m = _PROJECT_MAIN_SCENE_RE.search(project_text)
+        if not m:
+            errs.append('project.godot: missing application run/main_scene="res://..."')
+        elif m.group(1).startswith("res://"):
+            main_scene = project_dir / m.group(1)[len("res://") :]
+            if not main_scene.exists():
+                errs.append(f"project.godot: run/main_scene references missing '{m.group(1)}'")
     else:
         errs.append("project.godot is missing")
 
+    script_owners, scene_owner_errs = _scene_script_owners(project_dir)
+    errs.extend(scene_owner_errs)
+
+    used_actions: set[str] = set()
     for p in project_dir.rglob("*.gd"):
         rel = p.relative_to(project_dir)
         text = p.read_text()
@@ -222,10 +453,42 @@ def sanity_check(project_dir: Path) -> list[str]:
             errs.append(f"{rel}: missing `extends` on first non-comment line")
         for e in _balanced(text, [("(", ")"), ("{", "}"), ("[", "]")]):
             errs.append(f"{rel}: {e}")
-        for act in _ACTION_RE.findall(text):
+        file_actions = _input_actions_in_text(text)
+        used_actions.update(file_actions)
+        for act in file_actions:
             if act not in actions:
                 errs.append(
                     f"{rel}: Input action '{act}' not declared in project.godot [input]"
+                )
+            required_key = _ARROW_KEY_BY_ACTION.get(act)
+            if required_key and required_key not in action_keycodes.get(act, set()):
+                errs.append(
+                    f"project.godot: movement action '{act}' must keep arrow key physical_keycode {required_key}"
+                )
+        for quoted, bare in _ONREADY_DOLLAR_PATH_RE.findall(text):
+            ref_path = quoted or bare
+            owners = script_owners.get(str(p.resolve()), [])
+            if not owners:
+                continue
+            for scene, owner_path, nodes in owners:
+                if not _resolve_relative_node_path(nodes, owner_path, ref_path):
+                    errs.append(
+                        f"{rel}: @onready path '${ref_path}' does not resolve from "
+                        f"node '{owner_path}' in {scene.relative_to(project_dir)}"
+                    )
+
+    if template is not None:
+        for action in sorted(_TEMPLATE_REQUIRED_ACTIONS[template]):
+            if action not in actions:
+                errs.append(f"project.godot: template '{template}' requires input action '{action}'")
+            if action not in used_actions:
+                errs.append(f"scripts: template '{template}' must read input action '{action}'")
+        for action, required_codes in _TEMPLATE_REQUIRED_KEYCODES[template].items():
+            actual_codes = action_keycodes.get(action, set())
+            missing_codes = sorted(required_codes - actual_codes)
+            if missing_codes:
+                errs.append(
+                    f"project.godot: action '{action}' missing required physical_keycode(s) {missing_codes}"
                 )
 
     for p in (
@@ -265,6 +528,26 @@ def sanity_check(project_dir: Path) -> list[str]:
                     f"declare as [ext_resource] at top of file and reference via ExtResource(\"id\")"
                 )
 
+    for p in project_dir.rglob("*.gdshader"):
+        try:
+            text = p.read_text()
+        except UnicodeDecodeError:
+            continue
+        rel = p.relative_to(project_dir)
+        if "SCREEN_TEXTURE" in text or "screen_texture" in text:
+            errs.append(f"{rel}: web build forbids SCREEN_TEXTURE/screen_texture post-process sampling")
+        if re.search(r"\bvoid\s+fragment\s*\([^)]*\)\s*\{[\s\S]*?\breturn\s*;", text):
+            errs.append(f"{rel}: fragment() contains bare return; Godot shaders reject this")
+
+    for p in list(project_dir.rglob("*.tscn")) + list(project_dir.rglob("*.tres")):
+        try:
+            text = p.read_text()
+        except UnicodeDecodeError:
+            continue
+        rel = p.relative_to(project_dir)
+        if "BackBufferCopy" in text:
+            errs.append(f"{rel}: web build forbids BackBufferCopy post-process nodes")
+
     return errs
 
 
@@ -300,7 +583,8 @@ async def run_synthesize(
     system = load_prompt("synthesize")
     tree = _tree_summary(project_dir)
     ctx = _context_snippets()
-    user = _build_user_prompt(design, resolved_assets, resolved_sfx, tree, ctx)
+    base_user = _build_user_prompt(design, resolved_assets, resolved_sfx, tree, ctx)
+    user = base_user
 
     log: list[dict] = []
     last_errs: list[str] = []
@@ -329,7 +613,7 @@ async def run_synthesize(
         except (ValidationError, ValueError, json.JSONDecodeError) as e:
             last_errs = [f"edit plan did not parse: {e}"]
             log.append({"attempt": attempt, "stage": "parse", "errors": last_errs})
-            user = _with_feedback(user, last_errs)
+            user = _with_feedback(base_user, last_errs)
             attempt += 1
             continue
         except Exception as e:
@@ -350,7 +634,7 @@ async def run_synthesize(
         except ValueError as e:
             last_errs = [str(e)]
             log.append({"attempt": attempt, "stage": "apply", "errors": last_errs})
-            user = _with_feedback(user, last_errs)
+            user = _with_feedback(base_user, last_errs)
             attempt += 1
             continue
 
@@ -365,7 +649,7 @@ async def run_synthesize(
             None,
         )
 
-        errs = sanity_check(project_dir)
+        errs = sanity_check(project_dir, template=design.template)
         log.append(
             {
                 "attempt": attempt,
@@ -388,7 +672,7 @@ async def run_synthesize(
             return
 
         last_errs = errs
-        user = _with_feedback(user, errs)
+        user = _with_feedback(base_user, errs)
         yield (
             Event(
                 phase="synthesize",
@@ -447,7 +731,7 @@ async def repair_from_build_error(
     text = await claude_json(system=system, user=user, temperature=0.3, max_tokens=16000, model=CLAUDE_SONNET_MODEL)
     raw = extract_json(text)
     plan = EditPlan.model_validate(raw)
-    _apply_plan(project_dir, plan)
+    applied = _apply_repair_plan(project_dir, plan, template=design.template)
     # Append to the same log file for traceability.
     log_path = session_log_dir(session_id) / "synthesize.json"
     existing = json.loads(log_path.read_text()) if log_path.exists() else []
@@ -455,7 +739,7 @@ async def repair_from_build_error(
         {
             "stage": "build_repair",
             "stderr_tail": stderr[-1000:],
-            "files_applied": [fe.path for fe in plan.files],
+            "files_applied": applied,
         }
     )
     log_path.write_text(json.dumps(existing, indent=2))
@@ -495,12 +779,16 @@ async def repair_from_qa_issue(
         + "- broken_scale: a node's scale or a camera's zoom/position is"
         " off; do NOT touch collision shapes on the humanoid — only the"
         " mesh scale or camera.\n\n"
+        + "- runtime_error: fix the missing node, nil dereference, or invalid"
+        " method call described by QA diagnostics.\n"
+        + "- unresponsive_controls: verify input actions, movement code,"
+        " collision layers, camera following, and visible HUD feedback.\n\n"
         + "Emit a corrective edit plan in the same JSON format."
     )
     text = await claude_json(system=system, user=user, temperature=0.3, max_tokens=16000, model=CLAUDE_SONNET_MODEL)
     raw = extract_json(text)
     plan = EditPlan.model_validate(raw)
-    _apply_plan(project_dir, plan)
+    applied = _apply_repair_plan(project_dir, plan, template=design.template)
     log_path = session_log_dir(session_id) / "synthesize.json"
     existing = json.loads(log_path.read_text()) if log_path.exists() else []
     existing.append(
@@ -508,7 +796,7 @@ async def repair_from_qa_issue(
             "stage": "qa_repair",
             "issue_kind": issue_kind,
             "description": description,
-            "files_applied": [fe.path for fe in plan.files],
+            "files_applied": applied,
         }
     )
     log_path.write_text(json.dumps(existing, indent=2))

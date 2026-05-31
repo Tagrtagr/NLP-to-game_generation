@@ -2,10 +2,10 @@
 
 Playwright (chromium headless) loads the exported web build, polls
 `window.__GODOT_READY__` (set by the per-template `autoload/ready_signal.gd`
-via JavaScriptBridge), then captures three screenshots at ready+0s / +3s /
-+6s. The three PNGs go to Gemini 3 Flash which flags critical rendering
-failures (blank canvas, pink missing-texture squares, error overlays,
-broken scale).
+via JavaScriptBridge), then captures a short interaction sequence. The PNGs
+go to Gemini 3 Flash which flags critical rendering and gameplay failures
+(blank canvas, pink missing-texture squares, error overlays, broken scale,
+or controls that visibly do nothing).
 
 QA is strictly a floor: aesthetic issues are NOT its job. We only trigger
 a repair when the game is visibly broken, because any repair spends from
@@ -31,8 +31,13 @@ from .prompts import load_prompt
 
 QA_BASE_URL = os.environ.get("QA_BASE_URL", "http://127.0.0.1:8000")
 READY_TIMEOUT_S = 30.0
-POST_READY_DELAYS_S = (0.0, 3.0, 6.0)
 VIEWPORT = {"width": 1280, "height": 720}
+INTERACTION_STEPS = (
+    ("ready", None),
+    ("after holding ArrowRight", "ArrowRight"),
+    ("after holding ArrowUp", "ArrowUp"),
+    ("after pressing Space", "Space"),
+)
 
 
 @dataclass
@@ -42,11 +47,13 @@ class QAResult:
     issue_kind: str | None
     description: str
     screenshots_rel: list[str] = field(default_factory=list)
+    browser_diagnostics: list[str] = field(default_factory=list)
 
 
-async def _capture(session_id: str, web_url: str, web_dir: Path) -> tuple[list[bytes], list[str]]:
-    """Returns (png_bytes_list, rel_paths_under_session). Screenshots are
-    written to <session>/qa/ so the frontend (or debugging) can view them."""
+async def _capture(
+    session_id: str, web_url: str, web_dir: Path
+) -> tuple[list[bytes], list[str], list[str], list[str]]:
+    """Return screenshots, relative paths, labels, and browser diagnostics."""
     from playwright.async_api import async_playwright
 
     qa_dir = web_dir.parent / "qa"
@@ -54,35 +61,56 @@ async def _capture(session_id: str, web_url: str, web_dir: Path) -> tuple[list[b
 
     images: list[bytes] = []
     rel_paths: list[str] = []
+    labels: list[str] = []
+    diagnostics: list[str] = []
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         try:
             ctx = await browser.new_context(viewport=VIEWPORT)
             page = await ctx.new_page()
+            def _on_console(msg) -> None:
+                if msg.type in {"error", "warning"}:
+                    diagnostics.append(f"console.{msg.type}: {msg.text}")
+
+            page.on("console", _on_console)
+            page.on("pageerror", lambda exc: diagnostics.append(f"pageerror: {exc}"))
             await page.goto(web_url, wait_until="load")
             await page.wait_for_function(
                 "window.__GODOT_READY__ === true",
                 timeout=READY_TIMEOUT_S * 1000,
             )
-            for i, delay in enumerate(POST_READY_DELAYS_S):
-                if delay > 0:
-                    await asyncio.sleep(delay)
+            await page.mouse.click(VIEWPORT["width"] / 2, VIEWPORT["height"] / 2)
+            for i, (label, key) in enumerate(INTERACTION_STEPS):
+                if key == "Space":
+                    await page.keyboard.press(key)
+                    await asyncio.sleep(0.5)
+                elif key:
+                    await page.keyboard.down(key)
+                    await asyncio.sleep(0.8)
+                    await page.keyboard.up(key)
+                    await asyncio.sleep(0.2)
                 png = await page.screenshot(type="png", full_page=False)
                 images.append(png)
-                fname = f"qa_{i}.png"
+                labels.append(label)
+                fname = f"qa_{i}_{label.lower().replace(' ', '_')}.png"
                 (qa_dir / fname).write_bytes(png)
                 rel_paths.append(f"workspaces/{session_id}/qa/{fname}")
         finally:
             await browser.close()
 
-    return images, rel_paths
+    return images, rel_paths, labels, diagnostics
 
 
-async def _review(images: list[bytes]) -> QAResult:
+async def _review(images: list[bytes], labels: list[str], diagnostics: list[str]) -> QAResult:
     system = load_prompt("qa")
+    diag_text = "\n".join(f"- {d}" for d in diagnostics[-20:]) or "- none"
     user = (
-        "Three screenshots attached in order: ready+0s, ready+3s, ready+6s. "
+        "Screenshots attached in this order:\n"
+        + "\n".join(f"{i + 1}. {label}" for i, label in enumerate(labels))
+        + "\n\nBrowser/runtime diagnostics captured during the sequence:\n"
+        + diag_text
+        + "\n\n"
         "Return the single JSON object defined in the system prompt."
     )
     text = await gemini_vision_json(
@@ -96,6 +124,7 @@ async def _review(images: list[bytes]) -> QAResult:
         severity=severity,
         issue_kind=raw.get("issue_kind") or None,
         description=str(raw.get("description") or ""),
+        browser_diagnostics=diagnostics,
     )
 
 
@@ -138,7 +167,7 @@ async def run_qa(
     )
 
     try:
-        images, shot_rels = await _capture(session_id, web_url, web_dir)
+        images, shot_rels, labels, diagnostics = await _capture(session_id, web_url, web_dir)
     except Exception as e:
         _log(session_id, [{"stage": "capture", "error": f"{type(e).__name__}: {e}"}])
         yield (
@@ -158,13 +187,13 @@ async def run_qa(
             step="capture",
             status="done",
             detail=f"{len(images)} screenshots",
-            payload={"screenshots": shot_rels},
+            payload={"screenshots": shot_rels, "labels": labels},
         ),
         None,
     )
 
     try:
-        result = await _review(images)
+        result = await _review(images, labels, diagnostics)
     except Exception as e:
         _log(
             session_id,
@@ -192,6 +221,8 @@ async def run_qa(
                 "issue_kind": result.issue_kind,
                 "description": result.description,
                 "shots": shot_rels,
+                "labels": labels,
+                "browser_diagnostics": diagnostics[-20:],
             }
         ],
     )
@@ -211,6 +242,7 @@ async def run_qa(
                 "severity": result.severity,
                 "issue_kind": result.issue_kind,
                 "screenshots": shot_rels,
+                "browser_diagnostics": result.browser_diagnostics[-20:],
             },
         ),
         result,
