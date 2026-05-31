@@ -34,6 +34,8 @@ For local Docker Compose:
 docker compose -f docker-compose.backend.yml up --build
 ```
 
+App Platform expects the backend to bind on `0.0.0.0:$PORT`. The Dockerfile already does that and defaults to `8080`.
+
 Required backend environment variables:
 
 ```bash
@@ -89,4 +91,3 @@ The MVP stores generated workspaces on the backend container. That is not durabl
 - add Postgres for job metadata and event history
 - upload generated `web/` folders and QA screenshots to object storage
 - return durable artifact URLs instead of `/workspaces/...`
-
