@@ -17,7 +17,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl unzip libfontconfig1 libxkbcommon0 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY backend/pyproject.toml backend/uv.lock ./
+COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
 
 RUN uv run playwright install --with-deps chromium
@@ -40,7 +40,7 @@ RUN set -eux; \
     cp -R /tmp/godot_templates/templates/* /root/.local/share/godot/export_templates/${GODOT_VER_SHORT}/; \
     rm -rf /tmp/godot /tmp/godot.zip /tmp/templates.tpz /tmp/godot_templates
 
-COPY backend ./
+COPY . ./
 
 RUN mkdir -p /app/backend/workspaces
 

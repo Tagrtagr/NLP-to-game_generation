@@ -21,11 +21,11 @@ For the first public demo, local container storage is acceptable. Generated game
 
 ## Backend: DigitalOcean App Platform or Droplet
 
-Build from the repo root with:
+Build from the backend directory with:
 
 ```bash
-docker build -f backend/Dockerfile -t godot-agent-backend .
-docker run --env-file backend/.env -p 8000:8000 godot-agent-backend
+docker build -t godot-agent-backend ./backend
+docker run --env-file backend/.env -e PORT=8000 -p 8000:8000 godot-agent-backend
 ```
 
 For local Docker Compose:
