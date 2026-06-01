@@ -476,6 +476,16 @@ def sanity_check(project_dir: Path, template: TemplateId | None = None) -> list[
                         f"{rel}: @onready path '${ref_path}' does not resolve from "
                         f"node '{owner_path}' in {scene.relative_to(project_dir)}"
                     )
+        if (
+            "extends Area2D" in text
+            and re.search(r"\bsignal\s+\w*collected\b", text)
+            and re.search(r"\bfunc\s+collect\s*\(", text)
+            and not re.search(r"\b(?:body|area)(?:_shape)?_entered\b", text)
+        ):
+            errs.append(
+                f"{rel}: collectible Area2D defines collect() but never connects "
+                "body_entered/area_entered to call it"
+            )
 
     if template is not None:
         for action in sorted(_TEMPLATE_REQUIRED_ACTIONS[template]):

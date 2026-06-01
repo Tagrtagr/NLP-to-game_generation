@@ -8,6 +8,7 @@ from agent.clients.tripo import _url_of
 from agent import llm as llm_module
 from agent.schema import GameDesign
 from agent.synthesize import EditPlan, FileEdit, _apply_repair_plan, sanity_check
+import app as app_module
 
 
 def _valid_design(**overrides):
@@ -149,6 +150,40 @@ def test_sanity_catches_missing_onready_node_path(tmp_path):
 
     assert any("$UI/MissingLabel" in e for e in errs)
     assert not any("$Player" in e for e in errs)
+
+
+def test_sanity_catches_collectible_without_overlap_trigger(tmp_path):
+    _write_minimal_project(tmp_path)
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "seed.gd").write_text(
+        "extends Area2D\n\n"
+        "signal seed_collected(remaining: int)\n\n"
+        "func collect(remaining: int) -> void:\n"
+        "\tseed_collected.emit(remaining)\n"
+    )
+
+    errs = sanity_check(tmp_path)
+
+    assert any("collectible Area2D defines collect()" in e for e in errs)
+
+
+def test_sanity_allows_collectible_with_body_entered_trigger(tmp_path):
+    _write_minimal_project(tmp_path)
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "seed.gd").write_text(
+        "extends Area2D\n\n"
+        "signal seed_collected(remaining: int)\n\n"
+        "func _ready() -> void:\n"
+        "\tbody_entered.connect(_on_body_entered)\n\n"
+        "func _on_body_entered(body: Node) -> void:\n"
+        "\tcollect(0)\n\n"
+        "func collect(remaining: int) -> void:\n"
+        "\tseed_collected.emit(remaining)\n"
+    )
+
+    errs = sanity_check(tmp_path)
+
+    assert not any("collectible Area2D defines collect()" in e for e in errs)
 
 
 def test_sanity_catches_dropped_arrow_key_bindings_for_movement(tmp_path):
@@ -403,13 +438,71 @@ def test_asset_timeout_can_be_overridden_by_env(monkeypatch):
     assert assets_module._asset_timeout("sprite") == 180
 
 
+def test_asset_concurrency_defaults_pixellab_to_one(monkeypatch):
+    monkeypatch.delenv("PIXELLAB_CONCURRENCY", raising=False)
+    monkeypatch.setenv("GPT_IMAGE_CONCURRENCY", "4")
+
+    assert assets_module._asset_concurrency("pixellab", 1) == 1
+    assert assets_module._asset_concurrency("gpt_image", 2) == 4
+
+
+def test_generated_png_is_resized_to_requested_dimensions():
+    from io import BytesIO
+
+    from PIL import Image
+
+    img = Image.new("RGBA", (1536, 1024), (255, 0, 0, 255))
+    raw = BytesIO()
+    img.save(raw, format="PNG")
+
+    data = assets_module._resize_png(raw.getvalue(), (256, 64))
+
+    out = Image.open(BytesIO(data))
+    assert out.size == (256, 64)
+
+
+@pytest.mark.asyncio
+async def test_save_game_records_existing_web_build(tmp_path, monkeypatch):
+    workspaces = tmp_path / "workspaces"
+    saves = tmp_path / "saved_games"
+    web = workspaces / "abc123" / "web"
+    web.mkdir(parents=True)
+    (web / "index.html").write_text("<html></html>")
+    saves.mkdir()
+
+    monkeypatch.setattr(app_module, "WORKSPACES_DIR", workspaces)
+    monkeypatch.setattr(app_module, "SAVED_GAMES_DIR", saves)
+    monkeypatch.setattr(app_module, "SAVED_GAMES_INDEX", saves / "index.json")
+
+    saved = await app_module.save_game(
+        app_module.SaveGameRequest(
+            session_id="abc123",
+            title="Seed Sprint",
+            prompt="a gardener gathers seeds",
+            template="topdown_2d",
+            controls={"move": "WASD or arrow keys"},
+        )
+    )
+    listed = await app_module.list_saves()
+
+    assert saved.web_rel == "workspaces/abc123/web/index.html"
+    assert listed["saves"][0].title == "Seed Sprint"
+
+
 @pytest.mark.asyncio
 async def test_2d_background_uses_pixellab_when_openai_key_missing(monkeypatch):
     called = {}
 
     async def fake_pixellab_generate_sprite(**kwargs):
+        from io import BytesIO
+
+        from PIL import Image
+
         called["pixellab"] = kwargs
-        return b"png"
+        img = Image.new("RGBA", (1536, 1024), (0, 255, 0, 255))
+        out = BytesIO()
+        img.save(out, format="PNG")
+        return out.getvalue()
 
     async def fake_gpt_generate_image(**kwargs):
         raise AssertionError("gpt image should not be used without OPENAI_API_KEY")
@@ -437,7 +530,11 @@ async def test_2d_background_uses_pixellab_when_openai_key_missing(monkeypatch):
 
     data = await assets_module._generate_2d(asset, "pixel art")
 
-    assert data == b"png"
+    from io import BytesIO
+
+    from PIL import Image
+
+    assert Image.open(BytesIO(data)).size == (320, 180)
     assert called["pixellab"]["width"] == 320
     assert called["pixellab"]["height"] == 180
 

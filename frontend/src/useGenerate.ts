@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { backendUrl } from "./config";
 import { streamGenerate } from "./sse";
 import type { PhaseEvent, PhaseName } from "./types";
@@ -21,6 +21,7 @@ export type PhaseState = {
 export type GenState = {
   running: boolean;
   sessionId: string | null;
+  prompt: string | null;
   webRel: string | null;
   title: string | null;
   template: string | null;
@@ -30,6 +31,17 @@ export type GenState = {
   budgetUsed: number;
   budgetTrace: string[];
   error: string | null;
+};
+
+export type SavedGame = {
+  session_id: string;
+  title: string;
+  prompt?: string | null;
+  template?: string | null;
+  controls: Record<string, string>;
+  assets: AssetThumb[];
+  web_rel: string;
+  saved_at: string;
 };
 
 const initialPhases = (): Record<PhaseName, PhaseState> => ({
@@ -43,6 +55,7 @@ const initialPhases = (): Record<PhaseName, PhaseState> => ({
 const initialState = (): GenState => ({
   running: false,
   sessionId: null,
+  prompt: null,
   webRel: null,
   title: null,
   template: null,
@@ -56,8 +69,21 @@ const initialState = (): GenState => ({
 
 export function useGenerate() {
   const [state, setState] = useState<GenState>(initialState);
+  const [savedGames, setSavedGames] = useState<SavedGame[]>([]);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const sidRef = useRef<string | null>(null);
+
+  const refreshSaved = useCallback(async () => {
+    const res = await fetch(backendUrl("/api/saves"));
+    if (!res.ok) throw new Error(`list saves failed: ${res.status}`);
+    const data = (await res.json()) as { saves?: SavedGame[] };
+    setSavedGames(data.saves ?? []);
+  }, []);
+
+  useEffect(() => {
+    void refreshSaved().catch(() => {});
+  }, [refreshSaved]);
 
   const cancel = useCallback(() => {
     const sid = sidRef.current;
@@ -72,7 +98,7 @@ export function useGenerate() {
     abortRef.current?.abort();
     const ac = new AbortController();
     abortRef.current = ac;
-    setState({ ...initialState(), running: true });
+    setState({ ...initialState(), prompt, running: true });
 
     try {
       let sawDone = false;
@@ -85,6 +111,7 @@ export function useGenerate() {
         if (ev.event === "done") {
           sawDone = true;
           setState((s) => ({ ...s, running: false }));
+          void refreshSaved().catch(() => {});
           continue;
         }
         if (ev.event !== "phase") continue;
@@ -110,9 +137,50 @@ export function useGenerate() {
     } finally {
       if (abortRef.current === ac) abortRef.current = null;
     }
+  }, [refreshSaved]);
+
+  const saveCurrent = useCallback(async () => {
+    setSaveError(null);
+    const s = state;
+    if (!s.sessionId || !s.webRel) {
+      setSaveError("Generate a playable web build before saving.");
+      return;
+    }
+    const res = await fetch(backendUrl("/api/saves"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        session_id: s.sessionId,
+        title: s.title ?? s.prompt ?? "Untitled game",
+        prompt: s.prompt,
+        template: s.template,
+        controls: s.controls,
+        assets: s.assets,
+      }),
+    });
+    if (!res.ok) {
+      setSaveError(`save failed: ${res.status}`);
+      return;
+    }
+    await refreshSaved();
+  }, [refreshSaved, state]);
+
+  const loadSaved = useCallback((game: SavedGame) => {
+    sidRef.current = game.session_id;
+    setSaveError(null);
+    setState({
+      ...initialState(),
+      sessionId: game.session_id,
+      prompt: game.prompt ?? null,
+      webRel: game.web_rel,
+      title: game.title,
+      template: game.template ?? null,
+      controls: game.controls,
+      assets: game.assets,
+    });
   }, []);
 
-  return { state, start, cancel };
+  return { state, start, cancel, savedGames, saveCurrent, loadSaved, saveError };
 }
 
 const TERMINAL_STEP: Record<PhaseName, string> = {

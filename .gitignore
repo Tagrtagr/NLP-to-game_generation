@@ -26,6 +26,7 @@ export_presets.cfg.local
 
 # Workspaces (per-session generated game projects)
 backend/workspaces/
+backend/saved_games/
 
 # Bundled asset binaries — fetched by scripts/bootstrap.sh, never committed.
 # Only the manifests (manifest.json, sfx_manifest.json) and READMEs are tracked.

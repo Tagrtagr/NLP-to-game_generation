@@ -35,6 +35,8 @@ Your job: customize the template into the GameDesign, emitting a single JSON obj
 - Wire `GameDesign.sfx_map`: load each resolved SFX into an `AudioStreamPlayer` (or `AudioStreamPlayer2D/3D`) and trigger it at the gameplay event named in the key.
 - Every mechanic in `GameDesign.mechanics` must have working code — no TODO stubs.
 - Every scene in `scene_flow` must be reachable via the declared transitions; at least the `gameplay` scene must be fully playable.
+- Collectibles must be collected by touching/overlapping them unless `GameDesign.controls` declares a separate action. For an `Area2D` collectible, connect `body_entered` or `area_entered` in `_ready()` and call the collectible's `collect()` method there. The HUD counter must visibly update on pickup.
+- The first gameplay screen must make the objective mechanically obvious: place at least one collectible visible and reachable near the player, animate/bob/glow it, and make pickup feedback obvious with sound, particles, flash, and counter update.
 - For `topdown_2d`, collectibles and the first objective must be reachable with plain 4-way/8-way movement. Do NOT place collectibles inside `StaticBody2D` collision zones. Garden beds, mud, water, or tall grass that the player should walk through must be `Area2D` slow/decorative zones, not solid bodies.
 - Juice items from `GameDesign.juice` are implemented concretely (particles via `GPUParticles2D/3D`, hitstop via `Engine.time_scale`, flashes via modulate lerp — not prose). For screen shake, call `ScreenShake.kick(amount, duration)` — the autoload is registered in every tier-1 template; don't re-implement camera jitter.
 
@@ -44,6 +46,7 @@ Your job: customize the template into the GameDesign, emitting a single JSON obj
 - Rewriting `project.godot` movement actions and dropping the arrow-key `physical_keycode` entries. The sanity checker will reject the plan.
 - In top-down games, using only `move_left`/`move_right` or a platformer controller. The sanity checker will reject the plan.
 - In top-down games, making crop beds or collectible zones solid `StaticBody2D` blockers. Use `Area2D` for slow terrain and keep collectible paths open.
+- Defining `func collect()` on a pickup but never connecting `body_entered` / `area_entered` to call it. The sanity checker will reject the plan.
 - Adding `@onready var score = $UI/ScoreLabel` without adding `UI/ScoreLabel` to the scene that owns the script. The sanity checker will reject the plan.
 - Creating a `ShaderMaterial` resource but forgetting to attach it (`material = SubResource("...")` on the target node). See `shader_snippets.md` "How to wire a shader".
 - Referencing a path like `res://assets/player.png` when the resolved manifest actually ships it at `res://assets/player_sprite.png`. Use the exact `res_path` from the manifest.

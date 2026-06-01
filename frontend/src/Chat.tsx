@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { PhaseCard } from "./PhaseCard";
 import { PHASE_ORDER } from "./types";
-import type { GenState } from "./useGenerate";
+import type { GenState, SavedGame } from "./useGenerate";
 
 const PROMPT_EXAMPLES = [
   "a cozy 2D platformer where a cat collects yarn balls in a moonlit bakery",
@@ -11,12 +11,20 @@ const PROMPT_EXAMPLES = [
 
 export function Chat({
   state,
+  savedGames,
+  saveError,
   onSubmit,
   onCancel,
+  onSave,
+  onLoadSaved,
 }: {
   state: GenState;
+  savedGames: SavedGame[];
+  saveError: string | null;
   onSubmit: (prompt: string) => void;
   onCancel: () => void;
+  onSave: () => void;
+  onLoadSaved: (game: SavedGame) => void;
 }) {
   const [prompt, setPrompt] = useState("");
 
@@ -37,6 +45,59 @@ export function Chat({
       </div>
 
       <div className="flex-1 overflow-auto p-4 space-y-2">
+        {state.webRel && (
+          <div className="rounded border border-emerald-900/70 bg-emerald-950/20 p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-medium">Playable Game</h2>
+                <p className="mt-0.5 text-[11px] text-neutral-500">
+                  Save this build so it stays in your saved list.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={onSave}
+                className="rounded bg-emerald-500 px-3 py-1.5 text-xs font-medium text-neutral-950 hover:bg-emerald-400"
+              >
+                Save
+              </button>
+            </div>
+            {saveError && <div className="mt-2 text-xs text-rose-400">{saveError}</div>}
+          </div>
+        )}
+
+        {savedGames.length > 0 && (
+          <div className="rounded border border-neutral-800 bg-neutral-900/40 p-3">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-sm font-medium">Saved Games</h2>
+              <span className="text-[11px] text-neutral-500">{savedGames.length}</span>
+            </div>
+            <div className="mt-2 space-y-1.5">
+              {savedGames.slice(0, 5).map((game) => (
+                <button
+                  key={game.session_id}
+                  type="button"
+                  disabled={state.running}
+                  onClick={() => onLoadSaved(game)}
+                  className="w-full rounded bg-neutral-950/70 px-2 py-1.5 text-left hover:bg-neutral-900 disabled:opacity-50"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="truncate text-xs font-medium text-neutral-100">
+                      {game.title}
+                    </span>
+                    <span className="shrink-0 text-[10px] text-neutral-500">
+                      {formatSavedAt(game.saved_at)}
+                    </span>
+                  </div>
+                  {game.template && (
+                    <div className="mt-0.5 text-[10px] text-neutral-500">{game.template}</div>
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {Object.keys(state.controls).length > 0 && (
           <div className="rounded border border-neutral-800 bg-neutral-900/50 p-3">
             <div className="flex items-center justify-between gap-3">
@@ -132,4 +193,10 @@ export function Chat({
       </form>
     </aside>
   );
+}
+
+function formatSavedAt(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }

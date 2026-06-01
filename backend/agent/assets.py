@@ -16,6 +16,7 @@ import os
 import shutil
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
 from typing import Literal
 
@@ -57,8 +58,31 @@ def _asset_timeout(kind: AssetKind) -> float:
         return DEFAULT_TIMEOUTS[kind]
 
 
+def _asset_concurrency(service: str, default: int) -> int:
+    env_name = f"{service.upper()}_CONCURRENCY"
+    try:
+        return max(1, int(os.environ.get(env_name, default)))
+    except ValueError:
+        return default
+
+
 def _allow_placeholder_fallbacks() -> bool:
     return os.environ.get("ALLOW_PLACEHOLDER_FALLBACKS", "").lower() in {"1", "true", "yes"}
+
+
+def _resize_png(data: bytes, size: tuple[int, int] | None) -> bytes:
+    if not size:
+        return data
+    from PIL import Image
+
+    img = Image.open(BytesIO(data)).convert("RGBA")
+    if img.size == size:
+        return data
+    resample = Image.Resampling.NEAREST if max(size) <= 256 else Image.Resampling.LANCZOS
+    img = img.resize(size, resample)
+    out = BytesIO()
+    img.save(out, format="PNG")
+    return out.getvalue()
 
 
 @dataclass
@@ -223,19 +247,20 @@ async def _generate_2d(asset: Asset, style: str) -> bytes:
             w, h = asset.size or (512, 288)
         elif asset.kind == "ui":
             w, h = asset.size or (256, 128)
-        return await asyncio.wait_for(
+        data = await asyncio.wait_for(
             pixellab.generate_sprite(
                 prompt=asset.prompt, width=w, height=h, style=style
             ),
             timeout=_asset_timeout(asset.kind),
         )
+        return _resize_png(data, (w, h))
     if asset.kind == "bg":
         w, h = asset.size or (1536, 1024)
         transparent = False
     else:
         w, h = asset.size or (512, 256)
         transparent = True
-    return await asyncio.wait_for(
+    data = await asyncio.wait_for(
         gpt_image.generate_image(
             prompt=asset.prompt,
             width=w,
@@ -245,6 +270,7 @@ async def _generate_2d(asset: Asset, style: str) -> bytes:
         ),
         timeout=_asset_timeout(asset.kind),
     )
+    return _resize_png(data, (w, h))
 
 
 async def _generate_mesh(asset: Asset, style: str) -> bytes:
@@ -363,9 +389,9 @@ async def resolve_all(
     )
 
     semaphores = {
-        tripo.SERVICE_NAME: asyncio.Semaphore(1),
-        pixellab.SERVICE_NAME: asyncio.Semaphore(2),
-        gpt_image.SERVICE_NAME: asyncio.Semaphore(2),
+        tripo.SERVICE_NAME: asyncio.Semaphore(_asset_concurrency(tripo.SERVICE_NAME, 1)),
+        pixellab.SERVICE_NAME: asyncio.Semaphore(_asset_concurrency(pixellab.SERVICE_NAME, 1)),
+        gpt_image.SERVICE_NAME: asyncio.Semaphore(_asset_concurrency(gpt_image.SERVICE_NAME, 2)),
     }
 
     async def _resolve_limited(a: Asset) -> ResolvedAsset:
