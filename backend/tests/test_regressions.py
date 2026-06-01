@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from agent.build import GODOT_ERROR_RE
+from agent import assets as assets_module
 from agent.clients.tripo import _url_of
 from agent import llm as llm_module
 from agent.schema import GameDesign
@@ -353,6 +354,47 @@ def test_tripo_url_extraction_handles_dicts():
     assert _url_of({"type": "model/gltf-binary", "url": "https://example.com/a.glb"}) == (
         "https://example.com/a.glb"
     )
+
+
+def test_missing_bundled_fallback_raises_without_placeholder_opt_in(tmp_path, monkeypatch):
+    design = GameDesign.model_validate(_valid_design())
+    asset = design.assets[0]
+    fallback_root = tmp_path / "fallback_assets"
+    fallback_root.mkdir()
+
+    monkeypatch.delenv("ALLOW_PLACEHOLDER_FALLBACKS", raising=False)
+    monkeypatch.setattr(assets_module, "FALLBACK_DIR", fallback_root)
+    monkeypatch.setattr(assets_module, "session_dir", lambda sid: tmp_path / sid)
+    monkeypatch.setattr(
+        assets_module,
+        "fallback_manifest",
+        lambda: {asset.fallback_role: {"files": ["missing/player.png"]}},
+    )
+
+    with pytest.raises(assets_module.AssetResolutionError, match="bundled fallback"):
+        assets_module._load_fallback(asset, "strict-session", "timeout")
+
+
+def test_missing_bundled_fallback_can_write_placeholder_when_enabled(tmp_path, monkeypatch):
+    design = GameDesign.model_validate(_valid_design())
+    asset = design.assets[0]
+    fallback_root = tmp_path / "fallback_assets"
+    fallback_root.mkdir()
+
+    monkeypatch.setenv("ALLOW_PLACEHOLDER_FALLBACKS", "true")
+    monkeypatch.setattr(assets_module, "FALLBACK_DIR", fallback_root)
+    monkeypatch.setattr(assets_module, "session_dir", lambda sid: tmp_path / sid)
+    monkeypatch.setattr(
+        assets_module,
+        "fallback_manifest",
+        lambda: {asset.fallback_role: {"files": ["missing/player.png"]}},
+    )
+
+    resolved = assets_module._load_fallback(asset, "placeholder-session", "timeout")
+
+    assert resolved.source == "fallback"
+    assert resolved.path.exists()
+    assert "bundled fallback missing" in (resolved.error or "")
 
 
 def _write_minimal_project(root):

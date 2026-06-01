@@ -75,7 +75,10 @@ async def _capture(
 
             page.on("console", _on_console)
             page.on("pageerror", lambda exc: diagnostics.append(f"pageerror: {exc}"))
-            await page.goto(web_url, wait_until="load")
+            resp = await page.goto(web_url, wait_until="load")
+            status = resp.status if resp else None
+            if status is None or status >= 400:
+                raise RuntimeError(f"web build URL returned HTTP {status}: {web_url}")
             await page.wait_for_function(
                 "window.__GODOT_READY__ === true",
                 timeout=READY_TIMEOUT_S * 1000,

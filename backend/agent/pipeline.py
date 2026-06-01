@@ -25,9 +25,6 @@ from .synthesize import (
     run_synthesize,
 )
 
-MAX_QA_ROUNDS = 2  # initial + one budget-gated repair attempt
-
-
 async def run_pipeline(session_id: str, user_prompt: str) -> AsyncIterator[Event]:
     budget = RepairBudget(cap=3)
 
@@ -57,10 +54,19 @@ async def run_pipeline(session_id: str, user_prompt: str) -> AsyncIterator[Event
     # ---------- Phase 2: Assets ---------- #
     breaker = CircuitBreaker()
     resolved_assets: list[ResolvedAsset] = []
-    async for ev, ra in resolve_all(design, session_id, breaker):
-        yield ev
-        if ra is not None:
-            resolved_assets.append(ra)
+    try:
+        async for ev, ra in resolve_all(design, session_id, breaker):
+            yield ev
+            if ra is not None:
+                resolved_assets.append(ra)
+    except Exception as e:
+        yield Event(
+            phase="assets",
+            step="pipeline",
+            status="error",
+            detail=f"asset resolution failed: {type(e).__name__}: {e}",
+        )
+        return
 
     resolved_sfx = resolve_sfx(design, session_id)
     yield Event(
@@ -104,13 +110,22 @@ async def run_pipeline(session_id: str, user_prompt: str) -> AsyncIterator[Event
 
     # ---------- Phase 5: Visual QA ---------- #
     qa_result: QAResult | None = None
+    qa_hard_failure: str | None = None
     if web_ready:
-        for qa_round in range(MAX_QA_ROUNDS):
+        qa_round = 0
+        while True:
             qa_result = None
             async for ev, r in run_qa(session_id, project_dir):
                 yield ev
+                if ev.phase == "qa" and ev.status == "error" and ev.step == "capture":
+                    detail = ev.detail or ""
+                    if "HTTP 404" in detail or "HTTP 403" in detail:
+                        qa_hard_failure = detail
                 if r is not None:
                     qa_result = r
+
+            if qa_hard_failure:
+                break
 
             # Accept: QA inconclusive (None) OR passed OR non-critical.
             # We only spend budget on critical failures.
@@ -119,8 +134,6 @@ async def run_pipeline(session_id: str, user_prompt: str) -> AsyncIterator[Event
                 or qa_result.ok
                 or qa_result.severity != "critical"
             ):
-                break
-            if qa_round + 1 >= MAX_QA_ROUNDS:
                 break
             if not budget.try_consume(f"qa_repair:{qa_round + 1}"):
                 yield Event(
@@ -168,20 +181,35 @@ async def run_pipeline(session_id: str, user_prompt: str) -> AsyncIterator[Event
             if not rebuild_ok:
                 break
             # Loop back to re-QA.
+            qa_round += 1
 
     # ---------- Terminal ready event ---------- #
-    if web_ready:
-        qa_ok = qa_result.ok if qa_result is not None else True
+    if web_ready and qa_hard_failure:
         yield Event(
             phase="qa",
             step="ready",
-            status="done" if qa_ok else "progress",
-            detail="web build ready" + ("" if qa_ok else " (QA flagged; shipping anyway)"),
+            status="error",
+            detail=f"web export exists but public URL is not loadable: {qa_hard_failure}",
+            payload={"budget_used": budget.used, "budget_trace": budget.trace},
+        )
+    elif web_ready:
+        qa_status = "inconclusive" if qa_result is None else ("passed" if qa_result.ok else "failed")
+        qa_ok = qa_result.ok if qa_result is not None else False
+        yield Event(
+            phase="qa",
+            step="ready",
+            status="done",
+            detail=(
+                "web build ready"
+                if qa_status == "passed"
+                else f"web build ready (QA {qa_status}; shipping anyway)"
+            ),
             payload={
                 "web_rel": f"workspaces/{session_id}/web/index.html",
                 "budget_used": budget.used,
                 "budget_trace": budget.trace,
                 "qa_ok": qa_ok,
+                "qa_status": qa_status,
                 "qa_screenshots": qa_result.screenshots_rel if qa_result else [],
             },
         )

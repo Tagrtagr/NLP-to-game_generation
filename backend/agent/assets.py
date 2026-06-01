@@ -12,6 +12,7 @@ per-asset progress to the UI. The resolver stores files under
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -29,12 +30,27 @@ from .schema import Asset, AssetKind, GameDesign
 Source = Literal["generated", "fallback"]
 
 TIMEOUTS: dict[AssetKind, float] = {
-    "sprite": 35.0,
-    "tileset": 35.0,
-    "bg": 35.0,
-    "ui": 30.0,
-    "mesh": 150.0,
+    "sprite": 90.0,
+    "tileset": 90.0,
+    "bg": 120.0,
+    "ui": 120.0,
+    "mesh": 240.0,
 }
+
+
+class AssetResolutionError(Exception):
+    pass
+
+
+def _asset_generation_retries() -> int:
+    try:
+        return max(0, int(os.environ.get("ASSET_GENERATION_RETRIES", "1")))
+    except ValueError:
+        return 1
+
+
+def _allow_placeholder_fallbacks() -> bool:
+    return os.environ.get("ALLOW_PLACEHOLDER_FALLBACKS", "").lower() in {"1", "true", "yes"}
 
 
 @dataclass
@@ -167,6 +183,12 @@ def _load_fallback(asset: Asset, session_id: str, reason: str, palette: list[str
     if src.exists():
         shutil.copyfile(src, dst)
     else:
+        if not _allow_placeholder_fallbacks():
+            raise AssetResolutionError(
+                f"{asset.id}: generated asset failed ({reason}) and bundled fallback "
+                f"'{files[0]}' is missing. Set ALLOW_PLACEHOLDER_FALLBACKS=true to ship "
+                "procedural placeholders."
+            )
         # Bootstrap leaves Kenney packs as a manual step. If they're missing,
         # synthesize a placeholder so the pipeline still ships.
         _write_placeholder(asset, dst, palette)
@@ -250,30 +272,52 @@ async def resolve_asset(
         return _load_fallback(asset, session_id, f"{service} circuit open", palette)
 
     is_mesh = asset.kind == "mesh"
-    try:
-        if is_mesh:
-            data = await _generate_mesh(asset, style)
-        else:
-            data = await _generate_2d(asset, style)
-            check_2d_image(data)
-    except (TimeoutError, asyncio.TimeoutError) as e:
-        breaker.record_failure(service)
-        return _load_fallback(asset, session_id, f"timeout: {e}", palette)
-    except GarbageOutput as e:
-        breaker.record_failure(service)
-        return _load_fallback(asset, session_id, f"garbage: {e}", palette)
-    except tripo.ScaleMismatch as e:
-        # Not a service-health failure; don't trip the breaker — future meshes
-        # may still scale correctly. Just swap in the bundled fallback mesh.
-        return _load_fallback(asset, session_id, f"scale-mismatch: {e}", palette)
-    except tripo.TripoError as e:
-        breaker.record_failure(service)
-        return _load_fallback(asset, session_id, f"tripo: {e}", palette)
-    except NotImplementedError as e:
-        return _load_fallback(asset, session_id, str(e), palette)
-    except Exception as e:
-        breaker.record_failure(service)
-        return _load_fallback(asset, session_id, f"{type(e).__name__}: {e}", palette)
+    last_error: Exception | None = None
+    attempts = _asset_generation_retries() + 1
+    for attempt in range(attempts):
+        try:
+            if is_mesh:
+                data = await _generate_mesh(asset, style)
+            else:
+                data = await _generate_2d(asset, style)
+                check_2d_image(data)
+            break
+        except (TimeoutError, asyncio.TimeoutError) as e:
+            last_error = e
+            if attempt + 1 < attempts:
+                await asyncio.sleep(1.0)
+                continue
+            breaker.record_failure(service)
+            return _load_fallback(asset, session_id, f"timeout: {e}", palette)
+        except GarbageOutput as e:
+            last_error = e
+            if attempt + 1 < attempts:
+                await asyncio.sleep(1.0)
+                continue
+            breaker.record_failure(service)
+            return _load_fallback(asset, session_id, f"garbage: {e}", palette)
+        except tripo.ScaleMismatch as e:
+            # Not a service-health failure; don't trip the breaker — future meshes
+            # may still scale correctly. Just swap in the bundled fallback mesh.
+            return _load_fallback(asset, session_id, f"scale-mismatch: {e}", palette)
+        except tripo.TripoError as e:
+            last_error = e
+            if attempt + 1 < attempts:
+                await asyncio.sleep(1.0)
+                continue
+            breaker.record_failure(service)
+            return _load_fallback(asset, session_id, f"tripo: {e}", palette)
+        except NotImplementedError as e:
+            return _load_fallback(asset, session_id, str(e), palette)
+        except Exception as e:
+            last_error = e
+            if attempt + 1 < attempts:
+                await asyncio.sleep(1.0)
+                continue
+            breaker.record_failure(service)
+            return _load_fallback(asset, session_id, f"{type(e).__name__}: {e}", palette)
+    else:
+        raise AssetResolutionError(f"{asset.id}: asset generation failed: {last_error}")
 
     breaker.record_success(service)
     dst_dir = _assets_dir(session_id)
@@ -305,21 +349,41 @@ async def resolve_all(
         None,
     )
 
-    tasks = [
-        asyncio.create_task(
-            resolve_asset(
+    semaphores = {
+        tripo.SERVICE_NAME: asyncio.Semaphore(1),
+        pixellab.SERVICE_NAME: asyncio.Semaphore(2),
+        gpt_image.SERVICE_NAME: asyncio.Semaphore(2),
+    }
+
+    async def _resolve_limited(a: Asset) -> ResolvedAsset:
+        service = _service_for(a.kind)
+        async with semaphores[service]:
+            return await resolve_asset(
                 a,
                 session_id=session_id,
                 style=design.art_style,
                 breaker=breaker,
                 palette=design.palette,
             )
-        )
-        for a in design.assets
-    ]
+
+    tasks = [asyncio.create_task(_resolve_limited(a)) for a in design.assets]
 
     for coro in asyncio.as_completed(tasks):
-        resolved = await coro
+        try:
+            resolved = await coro
+        except Exception as e:
+            for task in tasks:
+                task.cancel()
+            yield (
+                Event(
+                    phase="assets",
+                    step="asset_ready",
+                    status="error",
+                    detail=f"{type(e).__name__}: {e}",
+                ),
+                None,
+            )
+            raise
         yield (
             Event(
                 phase="assets",
@@ -333,6 +397,7 @@ async def resolve_all(
                     "kind": resolved.kind,
                     "source": resolved.source,
                     "rel_path": resolved.rel_path,
+                    "url": f"workspaces/{session_id}/{resolved.rel_path}",
                 },
             ),
             resolved,

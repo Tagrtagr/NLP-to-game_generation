@@ -71,7 +71,13 @@ Asset-provider keys are optional for the MVP, but missing keys mean those provid
 OPENAI_API_KEY=
 TRIPO_API_KEY=
 PIXELLAB_API_KEY=
+ASSET_GENERATION_RETRIES=1
+ALLOW_PLACEHOLDER_FALLBACKS=false
 ```
+
+For public demos, keep `ALLOW_PLACEHOLDER_FALLBACKS=false`. That makes asset
+provider timeouts fail the run instead of shipping blocky procedural placeholder
+art when the bundled fallback packs are not present in the container.
 
 ## Frontend: Vercel
 
