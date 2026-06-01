@@ -397,6 +397,45 @@ def test_missing_bundled_fallback_can_write_placeholder_when_enabled(tmp_path, m
     assert "bundled fallback missing" in (resolved.error or "")
 
 
+@pytest.mark.asyncio
+async def test_2d_background_uses_pixellab_when_openai_key_missing(monkeypatch):
+    called = {}
+
+    async def fake_pixellab_generate_sprite(**kwargs):
+        called["pixellab"] = kwargs
+        return b"png"
+
+    async def fake_gpt_generate_image(**kwargs):
+        raise AssertionError("gpt image should not be used without OPENAI_API_KEY")
+
+    asset = GameDesign.model_validate(
+        _valid_design(
+            assets=[
+                {
+                    "id": "bg",
+                    "role": "background",
+                    "kind": "bg",
+                    "prompt": "pixel bakery background",
+                    "size": [320, 180],
+                    "expected_bbox": None,
+                    "fallback_role": "bg_sky_2d",
+                }
+            ]
+        )
+    ).assets[0]
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(assets_module.pixellab, "generate_sprite", fake_pixellab_generate_sprite)
+    monkeypatch.setattr(assets_module.gpt_image, "generate_image", fake_gpt_generate_image)
+    monkeypatch.setattr(assets_module, "check_2d_image", lambda data: None)
+
+    data = await assets_module._generate_2d(asset, "pixel art")
+
+    assert data == b"png"
+    assert called["pixellab"]["width"] == 320
+    assert called["pixellab"]["height"] == 180
+
+
 def _write_minimal_project(root):
     (root / "autoload").mkdir()
     (root / "scenes").mkdir()

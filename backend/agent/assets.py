@@ -208,8 +208,13 @@ async def _generate_2d(asset: Asset, style: str) -> bytes:
     """Sprites + tilesets → PixelLab (pixel-art, native small sizes).
     Backgrounds + UI → gpt-image-1 (illustrated, large canvas).
     """
-    if asset.kind in ("sprite", "tileset"):
+    use_pixellab = asset.kind in ("sprite", "tileset") or not os.environ.get("OPENAI_API_KEY")
+    if use_pixellab:
         w, h = asset.size or (64, 64)
+        if asset.kind == "bg":
+            w, h = asset.size or (512, 288)
+        elif asset.kind == "ui":
+            w, h = asset.size or (256, 128)
         return await asyncio.wait_for(
             pixellab.generate_sprite(
                 prompt=asset.prompt, width=w, height=h, style=style
