@@ -29,7 +29,7 @@ from .schema import Asset, AssetKind, GameDesign
 
 Source = Literal["generated", "fallback"]
 
-TIMEOUTS: dict[AssetKind, float] = {
+DEFAULT_TIMEOUTS: dict[AssetKind, float] = {
     "sprite": 90.0,
     "tileset": 90.0,
     "bg": 120.0,
@@ -47,6 +47,14 @@ def _asset_generation_retries() -> int:
         return max(0, int(os.environ.get("ASSET_GENERATION_RETRIES", "1")))
     except ValueError:
         return 1
+
+
+def _asset_timeout(kind: AssetKind) -> float:
+    env_name = f"ASSET_TIMEOUT_{kind.upper()}"
+    try:
+        return max(1.0, float(os.environ.get(env_name, DEFAULT_TIMEOUTS[kind])))
+    except ValueError:
+        return DEFAULT_TIMEOUTS[kind]
 
 
 def _allow_placeholder_fallbacks() -> bool:
@@ -219,7 +227,7 @@ async def _generate_2d(asset: Asset, style: str) -> bytes:
             pixellab.generate_sprite(
                 prompt=asset.prompt, width=w, height=h, style=style
             ),
-            timeout=TIMEOUTS[asset.kind],
+            timeout=_asset_timeout(asset.kind),
         )
     if asset.kind == "bg":
         w, h = asset.size or (1536, 1024)
@@ -235,7 +243,7 @@ async def _generate_2d(asset: Asset, style: str) -> bytes:
             style=style,
             transparent=transparent,
         ),
-        timeout=TIMEOUTS[asset.kind],
+        timeout=_asset_timeout(asset.kind),
     )
 
 
@@ -249,7 +257,7 @@ async def _generate_mesh(asset: Asset, style: str) -> bytes:
     """
     data = await asyncio.wait_for(
         tripo.generate_mesh(prompt=asset.prompt, style=style),
-        timeout=TIMEOUTS["mesh"],
+        timeout=_asset_timeout("mesh"),
     )
     tripo.check_glb(data, asset.expected_bbox)
     return data

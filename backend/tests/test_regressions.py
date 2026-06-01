@@ -397,6 +397,12 @@ def test_missing_bundled_fallback_can_write_placeholder_when_enabled(tmp_path, m
     assert "bundled fallback missing" in (resolved.error or "")
 
 
+def test_asset_timeout_can_be_overridden_by_env(monkeypatch):
+    monkeypatch.setenv("ASSET_TIMEOUT_SPRITE", "180")
+
+    assert assets_module._asset_timeout("sprite") == 180
+
+
 @pytest.mark.asyncio
 async def test_2d_background_uses_pixellab_when_openai_key_missing(monkeypatch):
     called = {}
