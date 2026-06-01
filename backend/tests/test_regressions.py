@@ -204,6 +204,8 @@ def test_sanity_enforces_topdown_get_vector_controls(tmp_path):
 
 @pytest.mark.asyncio
 async def test_claude_json_uses_streaming_for_large_outputs(monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
     class FakeStream:
         async def until_done(self):
             return None
@@ -245,6 +247,106 @@ async def test_claude_json_uses_streaming_for_large_outputs(monkeypatch):
 
     assert text == '{"files": []}'
     assert fake_client.messages.stream_kwargs is not None
+
+
+@pytest.mark.asyncio
+async def test_openrouter_api_key_routes_claude_json(monkeypatch):
+    class FakeCompletions:
+        def __init__(self):
+            self.kwargs = None
+
+        async def create(self, **kwargs):
+            self.kwargs = kwargs
+
+            class Message:
+                content = '{"ok": true}'
+
+            class Choice:
+                message = Message()
+
+            class Response:
+                choices = [Choice()]
+
+            return Response()
+
+    class FakeChat:
+        def __init__(self):
+            self.completions = FakeCompletions()
+
+    class FakeClient:
+        def __init__(self):
+            self.chat = FakeChat()
+
+    fake_client = FakeClient()
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or_test")
+    monkeypatch.setenv("OPENROUTER_TEXT_MODEL", "anthropic/claude-sonnet-4.5")
+    monkeypatch.setattr(llm_module, "_openrouter", lambda: fake_client)
+    monkeypatch.setattr(
+        llm_module,
+        "_anthropic",
+        lambda: (_ for _ in ()).throw(AssertionError("anthropic should not be used")),
+    )
+
+    text = await llm_module.claude_json(system="system", user="user")
+
+    kwargs = fake_client.chat.completions.kwargs
+    assert text == '{"ok": true}'
+    assert kwargs["model"] == "anthropic/claude-sonnet-4.5"
+    assert kwargs["messages"][0] == {"role": "system", "content": "system"}
+    assert kwargs["messages"][1] == {"role": "user", "content": "user"}
+    assert kwargs["response_format"] == {"type": "json_object"}
+
+
+@pytest.mark.asyncio
+async def test_openrouter_vision_uses_data_urls(monkeypatch):
+    class FakeCompletions:
+        def __init__(self):
+            self.kwargs = None
+
+        async def create(self, **kwargs):
+            self.kwargs = kwargs
+
+            class Message:
+                content = '{"ok": true}'
+
+            class Choice:
+                message = Message()
+
+            class Response:
+                choices = [Choice()]
+
+            return Response()
+
+    class FakeChat:
+        def __init__(self):
+            self.completions = FakeCompletions()
+
+    class FakeClient:
+        def __init__(self):
+            self.chat = FakeChat()
+
+    fake_client = FakeClient()
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or_test")
+    monkeypatch.setattr(llm_module, "_openrouter", lambda: fake_client)
+    monkeypatch.setattr(
+        llm_module,
+        "_gemini",
+        lambda: (_ for _ in ()).throw(AssertionError("gemini should not be used")),
+    )
+
+    text = await llm_module.gemini_vision_json(
+        system="system",
+        user="inspect",
+        images_png=[b"png-bytes"],
+    )
+
+    kwargs = fake_client.chat.completions.kwargs
+    content = kwargs["messages"][1]["content"]
+    assert text == '{"ok": true}'
+    assert kwargs["model"] == llm_module.OPENROUTER_VISION_MODEL
+    assert content[0] == {"type": "text", "text": "inspect"}
+    assert content[1]["type"] == "image_url"
+    assert content[1]["image_url"]["url"].startswith("data:image/png;base64,")
 
 
 def test_tripo_url_extraction_handles_dicts():

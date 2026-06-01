@@ -36,19 +36,42 @@ docker compose -f docker-compose.backend.yml up --build
 
 App Platform expects the backend to bind on `0.0.0.0:$PORT`. The Dockerfile already does that and defaults to `8080`.
 
-Required backend environment variables:
+Required backend environment variables for the hosted app:
 
 ```bash
-ANTHROPIC_API_KEY=
-OPENAI_API_KEY=
-GEMINI_API_KEY=
-TRIPO_API_KEY=
-PIXELLAB_API_KEY=
 CORS_ALLOW_ORIGINS=https://your-vercel-project.vercel.app
 QA_BASE_URL=https://your-backend.example.com
 ```
 
 `CORS_ALLOW_ORIGINS` must include the Vercel frontend URL. `QA_BASE_URL` must be the public backend URL so Playwright QA can load generated games over HTTP.
+
+For the core LLM pipeline, use either OpenRouter or direct provider keys.
+
+OpenRouter option:
+
+```bash
+OPENROUTER_API_KEY=
+OPENROUTER_TEXT_MODEL=anthropic/claude-sonnet-4.5
+OPENROUTER_CRITIC_MODEL=google/gemini-2.5-flash
+OPENROUTER_VISION_MODEL=google/gemini-2.5-flash
+OPENROUTER_APP_URL=https://your-vercel-project.vercel.app
+OPENROUTER_APP_NAME=Godot Agent
+```
+
+Direct provider option:
+
+```bash
+ANTHROPIC_API_KEY=
+GEMINI_API_KEY=
+```
+
+Asset-provider keys are optional for the MVP, but missing keys mean those providers will fall back or fail per the asset resolver:
+
+```bash
+OPENAI_API_KEY=
+TRIPO_API_KEY=
+PIXELLAB_API_KEY=
+```
 
 ## Frontend: Vercel
 
