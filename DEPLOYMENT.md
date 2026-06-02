@@ -14,10 +14,13 @@ Browser
   -> Vercel static frontend
   -> HTTPS FastAPI backend on DigitalOcean
   -> provider APIs: Anthropic/OpenAI/Gemini/Tripo/PixelLab
-  -> backend container local workspaces for generated web builds
+  -> backend container local workspaces during generation
+  -> optional Postgres metadata + DigitalOcean Spaces durable saved games
 ```
 
-For the first public demo, local container storage is acceptable. Generated games are served from the backend at `/workspaces/<session>/web/index.html`. For a larger release, move artifacts to object storage such as DigitalOcean Spaces, S3, R2, or Vercel Blob.
+For local development, generated games are served from the backend at `/workspaces/<session>/web/index.html` and saved metadata is written to `backend/saved_games/index.json`.
+
+For public durable saves, set `DATABASE_URL` and DigitalOcean Spaces/S3 variables. The save endpoint uploads the generated `web/` folder to object storage and stores the playable URL plus metadata in Postgres.
 
 ## Backend: DigitalOcean App Platform or Droplet
 
@@ -87,6 +90,20 @@ For public demos, keep `ALLOW_PLACEHOLDER_FALLBACKS=false`. That makes asset
 provider timeouts fail the run instead of shipping blocky procedural placeholder
 art when the bundled fallback packs are not present in the container.
 
+Durable saved-game storage:
+
+```bash
+DATABASE_URL=postgresql://user:password@host:25060/db?sslmode=require
+SPACES_BUCKET=your-space
+SPACES_REGION=nyc3
+SPACES_ENDPOINT_URL=https://nyc3.digitaloceanspaces.com
+SPACES_ACCESS_KEY=
+SPACES_SECRET_KEY=
+SPACES_PUBLIC_BASE_URL=https://your-space.nyc3.cdn.digitaloceanspaces.com
+```
+
+`SAVE_DATABASE_URL` can be used instead of `DATABASE_URL` if the app already needs a separate database URL for another feature. `SPACES_PUBLIC_BASE_URL` is optional but recommended when serving games through the Spaces CDN or a custom domain. Without these variables, the backend keeps the local JSON/workspace fallback for development.
+
 ## Frontend: Vercel
 
 Set the Vercel project root to `frontend/`.
@@ -123,8 +140,8 @@ To actually deploy this, I need:
 
 ## Next Upgrade
 
-The MVP stores generated workspaces on the backend container. That is not durable across redeploys. The next production step is:
+Generated saved-game bundles are durable when Postgres and Spaces are configured. Remaining production hardening:
 
-- add Postgres for job metadata and event history
-- upload generated `web/` folders and QA screenshots to object storage
-- return durable artifact URLs instead of `/workspaces/...`
+- store full job metadata and event history in Postgres
+- upload QA screenshots and build logs to object storage
+- add authentication and per-user saved-game ownership

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import uuid
 import os
 from datetime import datetime, timezone
@@ -13,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
+from agent.saved_games import ObjectStorage, SavedGameRecord, make_save_store
 from agent.session_manager import MANAGER
 
 BACKEND_DIR = Path(__file__).resolve().parent
@@ -23,6 +23,9 @@ WORKSPACES_DIR.mkdir(exist_ok=True)
 SAVED_GAMES_DIR.mkdir(exist_ok=True)
 
 load_dotenv(BACKEND_DIR / ".env")
+
+_SAVE_STORE = None
+_OBJECT_STORAGE: ObjectStorage | None = None
 
 
 def _cors_origins() -> list[str]:
@@ -90,22 +93,18 @@ def _safe_session_id(sid: str) -> str:
     return sid
 
 
-def _read_saved_games() -> dict[str, dict]:
-    if not SAVED_GAMES_INDEX.exists():
-        return {}
-    try:
-        data = json.loads(SAVED_GAMES_INDEX.read_text())
-    except json.JSONDecodeError:
-        return {}
-    if not isinstance(data, dict):
-        return {}
-    return {str(k): v for k, v in data.items() if isinstance(v, dict)}
+def _save_store():
+    global _SAVE_STORE
+    if _SAVE_STORE is None:
+        _SAVE_STORE = make_save_store(SAVED_GAMES_INDEX)
+    return _SAVE_STORE
 
 
-def _write_saved_games(data: dict[str, dict]) -> None:
-    tmp = SAVED_GAMES_INDEX.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, indent=2, sort_keys=True))
-    tmp.replace(SAVED_GAMES_INDEX)
+def _object_storage() -> ObjectStorage | None:
+    global _OBJECT_STORAGE
+    if _OBJECT_STORAGE is None:
+        _OBJECT_STORAGE = ObjectStorage.from_env()
+    return _OBJECT_STORAGE
 
 
 def _saved_web_rel(sid: str) -> str:
@@ -113,6 +112,13 @@ def _saved_web_rel(sid: str) -> str:
     if not web_index.exists():
         raise HTTPException(404, f"generated web build for session {sid} was not found")
     return f"workspaces/{sid}/web/index.html"
+
+
+def _web_dir(sid: str) -> Path:
+    web_dir = WORKSPACES_DIR / sid / "web"
+    if not (web_dir / "index.html").exists():
+        raise HTTPException(404, f"generated web build for session {sid} was not found")
+    return web_dir
 
 
 async def _drain(q):
@@ -155,39 +161,37 @@ async def cancel(sid: str) -> dict[str, bool]:
 
 @app.get("/api/saves")
 async def list_saves() -> dict[str, list[SavedGame]]:
-    saves = [SavedGame.model_validate(v) for v in _read_saved_games().values()]
-    saves.sort(key=lambda item: item.saved_at, reverse=True)
+    saves = [SavedGame.model_validate(item.to_dict()) for item in _save_store().list()]
     return {"saves": saves}
 
 
 @app.post("/api/saves")
 async def save_game(req: SaveGameRequest) -> SavedGame:
     sid = _safe_session_id(req.session_id)
-    web_rel = _saved_web_rel(sid)
-    saved = SavedGame(
+    storage = _object_storage()
+    if storage:
+        web_rel = await storage.upload_web_build(_web_dir(sid), sid)
+    else:
+        web_rel = _saved_web_rel(sid)
+    title = (req.title or req.prompt or f"Game {sid}").strip()[:120] or f"Game {sid}"
+    record = SavedGameRecord(
         session_id=sid,
-        title=(req.title or req.prompt or f"Game {sid}").strip()[:120],
+        title=title,
         prompt=req.prompt.strip() if req.prompt else None,
         template=req.template,
         controls=req.controls,
-        assets=req.assets,
+        assets=[asset.model_dump() for asset in req.assets],
         web_rel=web_rel,
         saved_at=datetime.now(timezone.utc).isoformat(),
     )
-    data = _read_saved_games()
-    data[sid] = saved.model_dump()
-    _write_saved_games(data)
-    return saved
+    saved = _save_store().upsert(record)
+    return SavedGame.model_validate(saved.to_dict())
 
 
 @app.delete("/api/saves/{sid}")
 async def delete_save(sid: str) -> dict[str, bool]:
     sid = _safe_session_id(sid)
-    data = _read_saved_games()
-    existed = sid in data
-    data.pop(sid, None)
-    _write_saved_games(data)
-    return {"deleted": existed}
+    return {"deleted": _save_store().delete(sid)}
 
 
 app.mount(

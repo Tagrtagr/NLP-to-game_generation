@@ -8,7 +8,7 @@ export function GameFrame({ state }: { state: GenState }) {
     return (
       <div className="relative h-full w-full bg-black">
         <iframe
-          src={backendUrl(`/${state.webRel}`)}
+          src={gameUrl(state.webRel)}
           className="h-full w-full bg-black"
           allow="autoplay; fullscreen; gamepad"
           title="game"
@@ -63,6 +63,11 @@ export function GameFrame({ state }: { state: GenState }) {
       </div>
     </div>
   );
+}
+
+function gameUrl(webRel: string): string {
+  if (/^https?:\/\//i.test(webRel)) return webRel;
+  return backendUrl(`/${webRel.replace(/^\/+/, "")}`);
 }
 
 function Elapsed({ running }: { running: boolean }) {

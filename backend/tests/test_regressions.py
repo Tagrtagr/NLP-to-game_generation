@@ -7,6 +7,7 @@ from agent import assets as assets_module
 from agent.clients.tripo import _url_of
 from agent import llm as llm_module
 from agent.schema import GameDesign
+from agent.saved_games import ObjectStorage
 from agent.synthesize import EditPlan, FileEdit, _apply_repair_plan, sanity_check
 import app as app_module
 
@@ -473,6 +474,12 @@ async def test_save_game_records_existing_web_build(tmp_path, monkeypatch):
     monkeypatch.setattr(app_module, "WORKSPACES_DIR", workspaces)
     monkeypatch.setattr(app_module, "SAVED_GAMES_DIR", saves)
     monkeypatch.setattr(app_module, "SAVED_GAMES_INDEX", saves / "index.json")
+    monkeypatch.setattr(app_module, "_SAVE_STORE", None)
+    monkeypatch.setattr(app_module, "_OBJECT_STORAGE", None)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("SAVE_DATABASE_URL", raising=False)
+    monkeypatch.delenv("SPACES_BUCKET", raising=False)
+    monkeypatch.delenv("S3_BUCKET", raising=False)
 
     saved = await app_module.save_game(
         app_module.SaveGameRequest(
@@ -487,6 +494,66 @@ async def test_save_game_records_existing_web_build(tmp_path, monkeypatch):
 
     assert saved.web_rel == "workspaces/abc123/web/index.html"
     assert listed["saves"][0].title == "Seed Sprint"
+
+
+@pytest.mark.asyncio
+async def test_save_game_uploads_web_build_when_object_storage_configured(tmp_path, monkeypatch):
+    workspaces = tmp_path / "workspaces"
+    saves = tmp_path / "saved_games"
+    web = workspaces / "abc123" / "web"
+    web.mkdir(parents=True)
+    (web / "index.html").write_text("<html></html>")
+    saves.mkdir()
+    calls = {}
+
+    class FakeStorage:
+        async def upload_web_build(self, web_dir, session_id):
+            calls["web_dir"] = web_dir
+            calls["session_id"] = session_id
+            return "https://cdn.example.test/games/abc123/web/index.html"
+
+    monkeypatch.setattr(app_module, "WORKSPACES_DIR", workspaces)
+    monkeypatch.setattr(app_module, "SAVED_GAMES_DIR", saves)
+    monkeypatch.setattr(app_module, "SAVED_GAMES_INDEX", saves / "index.json")
+    monkeypatch.setattr(app_module, "_SAVE_STORE", None)
+    monkeypatch.setattr(app_module, "_OBJECT_STORAGE", FakeStorage())
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("SAVE_DATABASE_URL", raising=False)
+
+    saved = await app_module.save_game(
+        app_module.SaveGameRequest(session_id="abc123", title="Remote Save")
+    )
+
+    assert calls == {"web_dir": web, "session_id": "abc123"}
+    assert saved.web_rel == "https://cdn.example.test/games/abc123/web/index.html"
+
+
+@pytest.mark.asyncio
+async def test_object_storage_uploads_web_files_with_public_index_url(tmp_path):
+    web = tmp_path / "web"
+    web.mkdir()
+    (web / "index.html").write_text("<html></html>")
+    (web / "game.js").write_text("console.log('ok')")
+    uploads = []
+
+    class RecordingStorage(ObjectStorage):
+        async def _put_file(self, key, path, content_type):
+            uploads.append((key, path.name, content_type))
+
+    storage = RecordingStorage(
+        endpoint_url="https://nyc3.digitaloceanspaces.com",
+        region="nyc3",
+        bucket="games-bucket",
+        access_key="access",
+        secret_key="secret",
+        public_base_url="https://cdn.example.test",
+    )
+
+    url = await storage.upload_web_build(web, "abc123")
+
+    assert url == "https://cdn.example.test/games/abc123/web/index.html"
+    assert ("games/abc123/web/index.html", "index.html", "text/html") in uploads
+    assert ("games/abc123/web/game.js", "game.js", "text/javascript") in uploads
 
 
 @pytest.mark.asyncio
