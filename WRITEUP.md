@@ -17,13 +17,13 @@ Four evaluation axes: prompt alignment, playability, aesthetic, and the user not
 
 Five phases, each emitting SSE events the frontend renders as live phase cards.
 
-**1. Design (~40–90 s).** Opus 4.7 returns a `GameDesign` (Pydantic: dimension, template, controls, mechanics, camera, signals, palette, juice, assets, shaders, sfx_map). A Gemini Flash critic picks the winner from N candidates under an anti-blandness bias; fallbacks and sfx are validated against the bundled manifests so the model cannot hallucinate filenames. Current `TEMPERATURES = (0.7,)` — single candidate — because Anthropic's 4K output-tokens-per-minute org cap is hit easily by best-of-3.
+**1. Design (~40–90 s).** Opus 4.7 returns a `GameDesign` (Pydantic: dimension, template, controls, mechanics, camera, signals, palette, juice, assets, shaders, sfx_map). A Gemini Flash critic can pick the winner from N candidates under an anti-blandness bias; fallbacks and sfx are validated against the manifests so the model cannot hallucinate filenames. Current `TEMPERATURES = (0.7,)` — single candidate — because Anthropic's output-token-per-minute org cap is hit easily by multi-candidate sampling.
 
-**2. Assets (~30–90 s).** `asyncio.gather` across every asset. Each task runs inside a generate-or-fallback wrapper. Timeouts: PixelLab 20 s (sprites), `gpt-image-1` 25 s (bg/UI), Tripo 60 s (meshes). Garbage detectors per service (near-uniform PNG, tiny GLB, bbox-diagonal-off-by-10×). A per-session circuit breaker short-circuits a service to fallback after 2 consecutive failures. If both the API and the bundled Kenney asset are unavailable, a palette-themed PIL placeholder (vertical gradient for `bg`, solid mid-tone otherwise) is written; the game always ships.
+**2. Assets (~30–90 s).** Bounded async fanout across every asset. Each task runs inside a generate-or-fallback wrapper. Timeouts: PixelLab 35 s (sprites), `gpt-image-1` 30-35 s (bg/UI), Tripo 150 s (meshes). Garbage detectors per service (near-uniform PNG, tiny GLB, bbox-diagonal-off-by-10×). A per-session circuit breaker short-circuits a service to fallback after 2 consecutive failures. If both the API and the optional Kenney asset are unavailable, a palette-themed PIL placeholder (vertical gradient for `bg`, solid mid-tone otherwise) is written; the game always ships with loadable resources.
 
 **3. Synthesize (~30–90 s).** Template copied to the session workspace. Sonnet 4.6 receives the full file tree + `GameDesign` + resolved asset manifest + SFX manifest + API/shader snippets + per-template notes. Returns a strict JSON edit plan (`{files: [{path, content}]}`). Sanity pass checks: balanced braces, `extends` on scripts, `res://` refs resolve to real files (including `project.godot`), input actions declared, banned inline `load()`/`preload()` in `.tscn`/`.tres` (runtime parse error). Failures feed back into a repair loop.
 
-**4. Build (~15–30 s).** `godot --headless --export-release "Web"`. `threads=false` in the preset → single-threaded WASM, no COOP/COEP headers needed, runs in every browser.
+**4. Build (~15–30 s).** `godot --headless --export-release "Web"`. `threads=false` in the preset → single-threaded WASM, no COOP/COEP headers needed, runs in every browser. A return code of 0 is not enough: Godot stderr parse/shader/resource errors are treated as build failures and enter repair.
 
 **5. QA (~15–25 s).** Playwright Chromium polls `window.__GODOT_READY__` (set by the per-template `ready_signal` autoload), captures 3 screenshots at ready+0/3/6s, Gemini Flash reviews for blank-screen / missing-texture / broken-scale. Runs after the iframe is already visible; only triggers a repair on critical issues.
 
@@ -53,7 +53,7 @@ Open `http://localhost:5173`, type a prompt, click Generate. Typical wall-clock:
 - **Strict schema + manifest-validated references.** `GameDesign` is a Pydantic model; every `fallback_role` must key into `fallback_assets/manifest.json` and every `sfx_map` value must key into `sfx_manifest.json`. The LLM cannot hallucinate a filename or a role that doesn't exist — validation failures are re-prompted with the violation.
 - **Sanity check as primary quality gate.** Balanced braces, `extends` declarations, `res://` refs resolving to real files (including `project.godot`'s `main_scene`), banned `load()`/`preload()` in `.tscn`/`.tres`. This catches "exports cleanly, runs blank" bugs that Godot's own exporter will not.
 - **Locked art_style + palette applied to every asset prompt.** Single style sentence and 4–6 hex codes are injected into every image/mesh prompt. Cheap to implement, single largest aesthetic-cohesion lever.
-- **Shader snippets library.** Every game ships with ≥1 shader from a hand-tuned set (CRT, water, outline, dither, sky-gradient, palette-lock). Large aesthetic upgrade at near-zero per-game cost.
+- **Shader snippets library.** Every game ships with ≥1 web-safe node/sky material shader from a hand-tuned set (water, outline, dither, sky-gradient). Large aesthetic upgrade at near-zero per-game cost.
 - **Generated-first, bundled-fallback assets.** The resolver always returns something; the pipeline cannot fail the asset phase. Combined with the repair budget, this produces a "best-effort but guaranteed-shippable" system.
 - **Global repair budget (cap = 3).** Per-phase caps of 2 each stack to 6 worst-case; a single shared counter caps total wall-clock and API cost deterministically.
 - **File-level generation + headless export**, not MCP / live editor. Faster, simpler, one-shot appropriate.
@@ -75,10 +75,10 @@ Open `http://localhost:5173`, type a prompt, click Generate. Typical wall-clock:
 
 ## Shortcomings + next steps
 
-- **Single design candidate.** Best-of-3 is in the code but disabled to stay under the token-rate cap. With a higher cap or streamed token accounting, re-enabling it would measurably raise taste-floor on vague prompts.
+- **Single design candidate.** Multi-candidate sampling is intentionally disabled to stay under the token-rate cap. With a higher cap or streamed token accounting, re-enabling it would measurably raise taste-floor on vague prompts.
 - **3D is flakier than 2D.** Walker_3d has more scene surface (camera rig + physics + third-person controller), so Claude takes more repair rounds. Shrinking the template's wired surface or splitting synthesize into two smaller calls (scene vs. scripts) would help.
 - **No token-stream in the Design card.** Users see "fanout start" then silence for ~60 s. Streaming Claude chunks to the UI would remove the only remaining perceived-stuck window.
 - **Gallery / session history is CLI-only.** A `GET /api/sessions` + sidebar list is ~30 min of work and would let users reopen past games without URL bookmarks.
 - **Fallback asset packs ship empty.** Kenney manual download required per `bootstrap.sh`; only palette placeholders currently render. Non-blocking (pipeline ships regardless) but a polish hit.
 - **No generated music.** Bundled loops only.
-- **Pre-template coverage.** `shooter_2d`, `puzzle_2d`, `adventure_3d` exist in plan but aren't polished. Rhythm / card-game templates are absent; prompts in those genres will map to the closest tier-1 template and feel off.
+- **Template coverage.** Rhythm / shooter / puzzle / card-game templates are absent; prompts in those genres map to the closest existing template and can feel off.
