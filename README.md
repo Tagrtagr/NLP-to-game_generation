@@ -80,6 +80,35 @@ Saved games are exposed through `GET/POST/DELETE /api/saves`. In local developme
 
 ## Architecture
 
+```mermaid
+flowchart LR
+  User[User prompt] --> UI[React frontend]
+  UI -->|POST /api/generate| API[FastAPI backend]
+  API --> Pipeline[Pipeline orchestrator]
+
+  Pipeline --> Design[Design]
+  Design --> Schema[Validated GameDesign schema]
+  Schema --> Assets[Assets]
+  Assets --> Synthesize[Synthesize]
+  Synthesize --> Build[Build]
+  Build --> QA[Browser QA]
+  QA --> Game[Playable web build]
+
+  Assets --> Providers[PixelLab / OpenAI image / Tripo]
+  Assets --> Fallbacks[Fallback assets]
+  Synthesize --> Templates[Godot templates]
+  Build --> Godot[Godot web export]
+  QA --> Repair[Bounded repair budget]
+  Repair --> Synthesize
+
+  Game --> Frame[Browser iframe]
+  Game --> Saves[Saved games]
+  Saves --> Local[Local workspace fallback]
+  Saves --> Durable[Postgres metadata + Spaces/S3 builds]
+
+  Pipeline -. streamed events .-> UI
+```
+
 ```
 POST /api/generate  ──SSE──▶  5 phases, shared RepairBudget(cap=3)
 
