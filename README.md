@@ -6,8 +6,6 @@ The goal is to compress the first playable prototype loop for small games: idea 
 
 Target: **2–3 min common-case, up to ~5 min worst-case with repairs**. SSE streams every phase — design tokens, asset thumbnails, code file writes, build stdout, QA screenshots — so slow feels *progressing*, not stuck.
 
-> **Reviewer notes:** [`WRITEUP.md`](WRITEUP.md) — single-document summary of pipeline, decisions, bugs encountered during build, and next steps.
-
 ## Research lineage
 
 This agent is a direct implementation of a recognizable research pattern. Credited explicitly because the architecture choices come from these papers, not from scratch:
@@ -81,6 +79,8 @@ Saved games are exposed through `GET/POST/DELETE /api/saves`. In local developme
 - **Vague prompt rescue:** +1 re-sample if design validation fails; ~$0.05 delta.
 
 ## Architecture
+
+For a visual walkthrough, see [`docs/architecture.md`](docs/architecture.md).
 
 ```
 POST /api/generate  ──SSE──▶  5 phases, shared RepairBudget(cap=3)
@@ -157,7 +157,7 @@ scripts/
 
 ## Evaluation evidence
 
-Evidence collected for the final submission:
+Evidence collected:
 
 - **Automated regression tests:** `cd backend && uv run pytest tests/test_regressions.py` passed with 24 tests, covering build-error detection, asset fallback/resize behavior, synthesize sanity checks, local saved games, and object-storage save wiring.
 - **Frontend build:** `cd frontend && npm run build` passed, confirming the TypeScript/Vite production bundle compiles.
