@@ -80,8 +80,6 @@ Saved games are exposed through `GET/POST/DELETE /api/saves`. In local developme
 
 ## Architecture
 
-For a visual walkthrough, see [`docs/architecture.md`](docs/architecture.md).
-
 ```
 POST /api/generate  ──SSE──▶  5 phases, shared RepairBudget(cap=3)
 
